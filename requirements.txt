@@ -1,0 +1,15 @@
+openai-whisper
+customtkinter
+sounddevice
+numpy
+scipy
+noisereduce
+openai-whisper
+torch
+psutil
+GPUtil
+google-generativeai
+fpdf
+wordcloud
+matplotlib
+soundfile
