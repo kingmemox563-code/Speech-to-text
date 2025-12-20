@@ -1,20 +1,19 @@
-# AYAR YÖNETİCİSİ (CONFIG MANAGER)
-# Bu sınıf, kullanıcının seçtiği ayarları (mikrofon, dil, model vb.) kaydeder.
-# Program kapatılıp açıldığında bu ayarları hatırlar.
-
 import json
 import os
+from dotenv import load_dotenv
+
+# .env dsyasını yükle
+load_dotenv()
 
 CONFIG_FILE = "config.json"
 
 DEFAULT_CONFIG = {
     "mic_index": None,
-    "model_size": "large", # Kullanıcının RTX 3060 kartı var, Gemini kalitesi için Large şart.
+    "model_size": "large",
     "language": "turkish",
     "theme": "Dark",
     "push_to_talk": False,
-    "translate_mode": False,
-    "api_key": ""
+    "translate_mode": False
 }
 
 class ConfigManager:
@@ -40,4 +39,10 @@ class ConfigManager:
             print(f"Config saving error: {e}")
 
     def get(self, key):
+        # API anahtarları için önce çevre değişkenlerine bak
+        if key == "openai_api_key":
+            return os.getenv("OPENAI_API_KEY")
+        if key == "gemini_api_key":
+            return os.getenv("GEMINI_API_KEY")
+        
         return self.config.get(key, DEFAULT_CONFIG.get(key))

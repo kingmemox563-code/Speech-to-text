@@ -13,3 +13,4 @@ fpdf
 wordcloud
 matplotlib
 soundfile
+python-dotenv

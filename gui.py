@@ -10,6 +10,10 @@ import numpy as np
 from openai import OpenAI
 from fpdf import FPDF
 from gemini_client import GeminiClient
+from dotenv import load_dotenv, set_key
+
+# .env dsyasını yükle
+load_dotenv()
 
 # Karakter hatalarını önlemek için sistem dilini UTF-8 yapıyoruz
 os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -406,43 +410,54 @@ class App(ctk.CTk):
         openai_key = self.api_entry.get().strip()
         gemini_key = self.gemini_api_entry.get().strip()
         
+        # .env dosyasına kaydet (En güvenli yöntem)
+        try:
+            env_path = os.path.join(os.getcwd(), ".env")
+            set_key(env_path, "OPENAI_API_KEY", openai_key)
+            set_key(env_path, "GEMINI_API_KEY", gemini_key)
+        except Exception as e:
+            print(f".env save error: {e}")
+
+        # config.json'dan API anahtarlarını temizle (Artık .env kullanılacak)
         config = {}
         if os.path.exists("config.json"):
             with open("config.json", "r", encoding="utf-8") as f:
                 config = json.load(f)
         
-        config["openai_api_key"] = openai_key
-        config["gemini_api_key"] = gemini_key
+        config.pop("openai_api_key", None)
+        config.pop("gemini_api_key", None)
         
         with open("config.json", "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
             
         self.api_key = openai_key
         self.gemini_api_key = gemini_key
-        messagebox.showinfo("Success", "API Keys saved.")
+        messagebox.showinfo("Başarılı", "API Anahtarları .env dosyasına güvenle kaydedildi.")
 
     def load_api_key(self):
         try:
-            if os.path.exists("config.json"):
-                with open("config.json", "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    
-                    # OpenAI Key
-                    raw_openai = data.get("openai_api_key", "").strip()
-                    if "sk-proj-" in raw_openai:
-                        self.api_key = raw_openai[raw_openai.find("sk-proj-"):].split()[0].replace('"', '').replace('}', '').strip()
-                    else:
-                        self.api_key = raw_openai
-                    
-                    if self.api_key:
-                        self.api_entry.delete(0, "end")
-                        self.api_entry.insert(0, self.api_key)
-                        
-                    # Gemini Key
-                    self.gemini_api_key = data.get("gemini_api_key", "").strip()
-                    if self.gemini_api_key:
-                        self.gemini_api_entry.delete(0, "end")
-                        self.gemini_api_entry.insert(0, self.gemini_api_key)
+            # Önce .env dosyasından oku
+            self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
+            self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+
+            # Eğer .env boşsa config.json'a (eski yer) bak
+            if not self.api_key or not self.gemini_api_key:
+                if os.path.exists("config.json"):
+                    with open("config.json", "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        if not self.api_key:
+                            self.api_key = data.get("openai_api_key", "").strip()
+                        if not self.gemini_api_key:
+                            self.gemini_api_key = data.get("gemini_api_key", "").strip()
+            
+            # UI kutularını doldur
+            if self.api_key:
+                self.api_entry.delete(0, "end")
+                self.api_entry.insert(0, self.api_key)
+            
+            if self.gemini_api_key:
+                self.gemini_api_entry.delete(0, "end")
+                self.gemini_api_entry.insert(0, self.gemini_api_key)
                         
         except Exception as e:
             print(f"Config load error: {e}")
