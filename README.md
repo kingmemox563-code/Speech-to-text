@@ -52,10 +52,8 @@ pip install -r requirements.txt
 4. **PDF Kaydet**: Sonuçları "SAVE AS PDF" butonuyla kurumsal bir rapora dönüştürün.
 
 ## 🎓 Proje Hakkında
-Bu proje, **İskenderun Teknik Üniversitesi (İSTE)** bünyesinde gerçekleştirilen bir bitirme/ders projesi kapsamında geliştirilmiştir.
-- **Geliştirici**: [Adınız Soyadınız]
+Bu proje, **İskenderun Teknik Üniversitesi (İSTE)** bünyesinde gerçekleştirilen bir ders projesi kapsamında geliştirilmiştir.
+- **Geliştirici**: Mehmet Karataş
 - **Ders**: Ders Projesi Teslimi
 
----
-> [!NOTE]
-> Bu uygulama eğitim amaçlı geliştirilmiş olup akademik dürüstlük kurallarına uygundur.
+Mühendislikte Bilgisayar Uygulamaları I Dersi kapsamında geliştirilmiştir
