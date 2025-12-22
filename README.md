@@ -54,6 +54,6 @@ pip install -r requirements.txt
 ## 🎓 Proje Hakkında
 Bu proje, **İskenderun Teknik Üniversitesi (İSTE)** bünyesinde gerçekleştirilen bir ders projesi kapsamında geliştirilmiştir.
 - **Geliştirici**: Mehmet Karataş
-- **Ders**: Ders Projesi Teslimi
+- **Ders**: Mühendislikte Bilgisayar Uygulamaları I
 
 Mühendislikte Bilgisayar Uygulamaları I Dersi kapsamında geliştirilmiştir
