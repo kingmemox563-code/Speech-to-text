@@ -1,0 +1,56 @@
+PROJE DOSYA AÇIKLAMALARI - Ses Analiz Sistemi V16
+
+Bu dosya, projedeki her bir dosyanın ne işe yaradığını ve temel görevlerini açıklar.
+
+1. main.py
+   - Uygulamanın giriş noktasıdır.
+   - gui.py içindeki App sınıfını başlatarak kullanıcı arayüzünü çalıştırır.
+
+2. gui.py
+   - Uygulamanın ana grafik arayüzüdür (CustomTkinter).
+   - Kayıt başlatma/durdurma, model seçimi, API anahtarı yönetimi ve rapor oluşturma butonlarını barındırır.
+   - AI analizlerini (GPT-4o ve Gemini) koordine eder.
+
+3. audio_recorder.py
+   - Ses kayıt işlemlerini yönetir.
+   - VAD (Voice Activity Detection - Ses Aktivitesi Algılama) özelliğine sahiptir; sessizlik anlarını atlayarak sadece konuşma olan bölümleri işler.
+
+4. audio_utils.py
+   - Ses donanımıyla ilgili yardımcı araçları içerir.
+   - Sisteme bağlı mikrofonları listeler ve varsayılan mikrofonu bulur.
+
+5. config_manager.py
+   - Uygulama ayarlarını yönetir.
+   - config.json ve .env dosyalarından ayarları yükler ve kaydeder.
+
+6. transcriber.py
+   - OpenAI Whisper modelini kullanarak ses verilerini metne (transkripsiyona) dönüştürür.
+   - Arka planda çalışarak kullanıcı arayüzünü dondurmaz.
+
+7. analytics.py
+   - Metin verileri üzerinde analizler yapar.
+   - Word Cloud (Kelime Bulutu) ve Duygu Analizi (Sentiment Analysis) pasta grafiklerini oluşturur.
+
+8. gemini_client.py
+   - Google Gemini 1.5 Flash API'si ile olan iletişimi sağlar.
+   - Metin analizi ve özetleme için Gemini SDK'sını kullanır.
+
+9. report_generator.py
+   - Profesyonel PDF raporları oluşturur.
+   - Transkriptleri, AI analiz sonuçlarını ve görsel grafikleri bir araya getirerek şık bir belge haline getirir.
+
+10. visualizer.py
+    - Ses kayıt sırasında ekrandaki hareketli mavi barları (visualization) yönetir.
+    - Sesin şiddetine göre barların yüksekliğini pürüzsüzce değiştirir.
+
+11. setup_ffmpeg.py
+    - Whisper için gerekli olan FFmpeg aracını projenin ana dizinine otomatik olarak indirip kuran yardımcı bir betiktir.
+
+12. .env
+    - OpenAI ve Gemini API anahtarlarının güvenli bir şekilde saklandığı yerdir.
+
+13. config.json
+    - Uygulamanın seçili dil, model tipi gibi kullanıcı tercihlerini sakladığı dosyadır.
+
+14. recordings/ (Klasör)
+    - Uygulama üzerinden gerçekleştirilen tüm ses kayıtlarının WAV formatında saklandığı özel klasördür.

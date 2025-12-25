@@ -1,10 +1,21 @@
+"""
+analytics.py - Veri Analitiği ve Görselleştirme Modülü
+Bu modül, metin verilerinden kelime bulutu (wordcloud) ve duygu analizi grafiklerini 
+(pie chart) oluşturmak için kullanılır.
+"""
+
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 import os
 
 class AnalyticsGenerator:
+    """
+    Metin analizi sonuçlarını görselleştiren yardımcı sınıf.
+    Kelime bulutu ve duygu durum grafiklerini üretir.
+    """
     def __init__(self):
-        # Genişletilmiş Türkçe stopwords listesi
+        # Genişletilmiş Türkçe stopwords (gereksiz kelimeler) listesi
+        # Bu kelimeler analiz sırasında dikkate alınmaz.
         self.stopwords = set([
             "ve", "ile", "bir", "bu", "şu", "o", "da", "de", "için", "gibi", "kadar", 
             "olarak", "olan", "ne", "var", "yok", "ama", "fakat", "lakin", "ancak", 
@@ -13,26 +24,38 @@ class AnalyticsGenerator:
             "ki", "bi", "miyim", "misin", "mısın", "bunu", "buna", "burada", "şimdi"
         ])
         
-        # GUI çakışmasını önlemek için arka plan işleyiciyi ayarla
+        # GUI çakışmasını önlemek için Matplotlib arka plan işleyicisini (backend) 'Agg' olarak ayarla.
+        # Bu, grafiklerin bir pencerede açılmak yerine arka planda oluşturulmasını sağlar.
         plt.switch_backend('Agg')
 
     def generate_wordcloud(self, text, output_path="temp_wordcloud.png"):
-        """Metni görsel kelime bulutuna dönüştürür."""
+        """
+        Verilen metni görsel bir kelime bulutuna dönüştürür.
+        
+        Args:
+            text (str): Analiz edilecek ham metin.
+            output_path (str): Oluşturulan görselin kaydedileceği dosya yolu.
+            
+        Returns:
+            str: Başarılı ise görselin mutlak yolu, başarısız ise None.
+        """
         try:
+            # Metin çok kısaysa işlem yapma
             if not text or len(text.strip()) < 5:
                 return None
             
-            # Kelime bulutu tasarımı (Görsel kalite artırıldı)
+            # Kelime bulutu oluşturucu konfigürasyonu
             wc = WordCloud(
                 width=1000, height=600,
                 background_color='white',
                 max_words=100,
                 stopwords=self.stopwords,
-                colormap='magma', # Daha modern bir renk paleti
+                colormap='magma', # Modern renk paleti
                 font_step=2,
                 prefer_horizontal=0.7
             ).generate(text)
             
+            # Görseli dosyaya yaz
             wc.to_file(output_path)
             return os.path.abspath(output_path)
         except Exception as e:
@@ -40,19 +63,31 @@ class AnalyticsGenerator:
             return None
 
     def generate_sentiment_chart(self, positive, negative, neutral, output_path="temp_chart.png"):
-        """Duygu dağılımını yüksek kaliteli bir pasta grafiğine dönüştürür."""
+        """
+        Duygu analizi sonuçlarını (pozitif, negatif, nötr) pasta grafiğine dönüştürür.
+        
+        Args:
+            positive (int): Pozitif duygu yüzdesi/skoru.
+            negative (int): Negatif duygu yüzdesi/skoru.
+            neutral (int): Nötr duygu yüzdesi/skoru.
+            output_path (str): Grafiğin kaydedileceği dosya yolu.
+            
+        Returns:
+            str: Başarılı ise görselin mutlak yolu, başarısız ise None.
+        """
         try:
-            # Eğer tüm değerler 0 ise grafik çizme
+            # Eğer tüm değerler 0 ise varsayılan olarak nötr göster
             if positive == 0 and negative == 0 and neutral == 0:
-                neutral = 100 # Varsayılan nötr
+                neutral = 100
 
             sizes = [positive, negative, neutral]
             labels = ['Pozitif', 'Negatif', 'Nötr']
-            # Modern ve profesyonel renkler
+            # Grafik renkleri: Yeşil, Kırmızı, Gri
             colors = ['#2ecc71', '#e74c3c', '#95a5a6'] 
-            explode = (0.05, 0, 0) # Sadece pozitif kısmı hafif öne çıkar
+            explode = (0.05, 0, 0) # Pozitif dilimi hafifçe dışa çıkar
             
-            plt.figure(figsize=(6, 5), dpi=100) # DPI artırılarak netlik sağlandı
+            # Grafik alanı oluştur (DPI 100-150 arası netlik için iyidir)
+            plt.figure(figsize=(6, 5), dpi=100) 
             patches, texts, autotexts = plt.pie(
                 sizes, 
                 explode=explode, 
@@ -60,20 +95,20 @@ class AnalyticsGenerator:
                 colors=colors, 
                 autopct='%1.1f%%', 
                 startangle=140, 
-                shadow=False # Daha temiz görünüm için gölge kaldırıldı
+                shadow=False
             )
             
-            # Etiket fontlarını düzelt (Türkçe karakter uyumu için)
+            # Etiketlerin görünürlüğünü ve yazı tipini ayarla
             for text in texts:
                 text.set_color('#2c3e50')
                 text.set_weight('bold')
             
-            plt.axis('equal')
+            plt.axis('equal') # Dairenin tam yuvarlak olmasını sağlar
             plt.title("Konuşma Duygu Analiz Dağılımı", pad=20, fontdict={'fontsize': 14, 'fontweight': 'bold'})
             
             plt.tight_layout()
             plt.savefig(output_path, transparent=False, dpi=150)
-            plt.close()
+            plt.close() # Hafıza sızıntısını önlemek için kapat
             return os.path.abspath(output_path)
         except Exception as e:
             print(f"Grafik hatası: {e}")
