@@ -5,8 +5,9 @@ API entegrasyonlarını ve raporlama özelliklerini bir araya getirir.
 """
 
 import customtkinter as ctk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox, filedialog, ttk
 import threading
+import queue
 import sounddevice as sd
 import soundfile as sf
 import json
@@ -15,9 +16,16 @@ import os
 import numpy as np
 from openai import OpenAI
 from fpdf import FPDF
+from docx import Document
+from docx.shared import Inches
 from gemini_client import GeminiClient
 from dotenv import load_dotenv, set_key
 import datetime
+import whisper
+import noisereduce as nr
+import pygame
+import os
+import shutil
 
 # .env dosyasını yükle (API anahtarları için)
 load_dotenv()
@@ -51,12 +59,24 @@ class App(ctk.CTk):
         self.api_key = "" # OpenAI key
         self.fs = 16000 # Whisper için standart örnekleme hızı (Sample Rate)
         self.selected_mic_index = self.get_default_mic()
+        self.audio_queue = queue.Queue() # Ses verileri için iş parçacığı güvenli kuyruk
+        self.all_session_transcripts = [] # Oturum boyuncaki tüm transkriptleri saklayan liste
+        
+        # Pygame Mixer Başlat (TTS ve Çalma için)
+        try:
+            pygame.mixer.init()
+        except:
+            print("Pygame mixer başlatılamadı.")
         
         # Son Analiz ve Transkript Verileri
         self.last_analysis = ""
         self.last_transcript = ""
         self.sentiment_stats = {'pos': 33, 'neg': 33, 'neu': 34}
         self.gemini_api_key = ""
+        
+        # Whisper Model Önbelleği
+        self.whisper_model = None
+        self.current_model_type = None
         
         # Ana Pencere Konfigürasyonu
         self.title("Ses Analiz Sistemi")
@@ -92,105 +112,411 @@ class App(ctk.CTk):
             return ["Mikrofon Bulunamadı"]
 
     def setup_ui(self):
-        """Tüm görsel bileşenleri (butonlar, paneller, textboxlar) oluşturur."""
+        """Tüm görsel bileşenleri (butonlar, sekmeler, paneller) modernize edilmiş şekilde oluşturur."""
         # Kayıtlar klasörü yoksa oluştur
         if not os.path.exists("recordings"):
             os.makedirs("recordings")
             
-        # Grid (Izgara) sistemini yapılandır
+        # Grid (Izgara) sistemini yapılandır (Sidebar ve Main Container)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # --- SOL PANEL (SideBar - Ayarlar) ---
-        self.sidebar = ctk.CTkFrame(self, width=300, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, rowspan=2, sticky="nsew")
+        # --- YAN NAVİGASYON PANELİ (Navigation Sidebar) ---
+        self.navigation_frame = ctk.CTkFrame(self, corner_radius=0)
+        self.navigation_frame.grid(row=0, column=0, sticky="nsew")
+        self.navigation_frame.grid_rowconfigure(5, weight=1)
+
+        self.navigation_frame_label = ctk.CTkLabel(self.navigation_frame, text=" SES ANALİZ\nSİSTEMİ", 
+                                                 font=ctk.CTkFont(size=20, weight="bold"))
+        self.navigation_frame_label.grid(row=0, column=0, padx=20, pady=20)
+
+        # Navigasyon Butonları
+        self.home_button = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10, text="Dashboard",
+                                        fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
+                                        anchor="w", command=self.home_button_event)
+        self.home_button.grid(row=1, column=0, sticky="ew")
+
+        self.analysis_button = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10, text="Analiz Raporu",
+                                            fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
+                                            anchor="w", command=self.analysis_button_event)
+        self.analysis_button.grid(row=2, column=0, sticky="ew")
+
+        self.history_button = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10, text="Geçmiş Kayıtlar",
+                                          fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
+                                          anchor="w", command=self.history_button_event)
+        self.history_button.grid(row=3, column=0, sticky="ew")
+
+        self.settings_button = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10, text="Ayarlar",
+                                            fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
+                                            anchor="w", command=self.settings_button_event)
+        self.settings_button.grid(row=4, column=0, sticky="ew")
+
+        # Görünüm Menüsü (Sidebar Alt Kısmı)
+        self.appearance_mode_menu = ctk.CTkOptionMenu(self.navigation_frame, values=["Dark", "Light", "System"],
+                                                    command=self.change_appearance_mode_event)
+        self.appearance_mode_menu.grid(row=6, column=0, padx=20, pady=20, sticky="s")
+
+        # --- ANA İÇERİK PANELLERİ ---
         
-        ctk.CTkLabel(self.sidebar, text="AYARLAR", font=("Arial", 20, "bold")).pack(pady=20)
+        # 1. DASHBOARD PANELİ (Ana Kayıt Ekranı)
+        self.home_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.home_frame.grid_columnconfigure(0, weight=1)
+        self.home_frame.grid_rowconfigure(2, weight=1)
+
+        # 1. Ses Görselleştirici (En Üst)
+        self.viz_container = ctk.CTkFrame(self.home_frame, corner_radius=15)
+        self.viz_container.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         
-        # Donanım Bilgisi Gösterimi (CUDA varsa turkuaz, yoksa turuncu)
-        color = "#00adb5" if self.device == "cuda" else "orange"
-        ctk.CTkLabel(self.sidebar, text=f"Donanım: {self.device.upper()}", text_color=color).pack()
-
-        # Whisper Model Seçimi
-        ctk.CTkLabel(self.sidebar, text="Whisper Modeli:").pack(pady=(10,0))
-        self.model_combo = ctk.CTkComboBox(self.sidebar, values=["tiny", "base", "small", "medium"])
-        self.model_combo.set("medium")
-        self.model_combo.pack(pady=5)
-
-        # Kaynak Dil Seçimi
-        ctk.CTkLabel(self.sidebar, text="Kaynak Dil:").pack()
-        self.lang_combo = ctk.CTkComboBox(self.sidebar, values=["turkish", "english", "german", "french", "spanish", "italian", "russian"])
-        self.lang_combo.set("turkish")
-        self.lang_combo.pack(pady=5)
-
-        # Mikrofon Seçimi Combo Box
-        ctk.CTkLabel(self.sidebar, text="Mikrofon Seçin:").pack(pady=(10,0))
-        self.mic_combo = ctk.CTkComboBox(self.sidebar, values=self.get_mic_list(), command=self.change_mic)
-        if self.selected_mic_index is not None:
-            mics = self.get_mic_list()
-            for m in mics:
-                if m.startswith(f"{self.selected_mic_index}:"):
-                    self.mic_combo.set(m)
-                    break
-        self.mic_combo.pack(pady=5)
-
-        # İngilizceye Çeviri Seçeneği
-        self.translate_var = ctk.BooleanVar(value=False)
-        ctk.CTkSwitch(self.sidebar, text="İngilizceye Çevir", variable=self.translate_var).pack(pady=10)
-
-        # Kayıt Başlat/Durdur Butonu
-        self.record_btn = ctk.CTkButton(self.sidebar, text="KAYDI BAŞLAT", fg_color="green", command=self.toggle_recording)
-        self.record_btn.pack(pady=10, padx=20)
-
-        # Dosyadan Ses Yükleme Butonu
-        self.file_btn = ctk.CTkButton(self.sidebar, text="SES DOSYASI SEÇ", fg_color="#34495e", command=self.process_audio_file)
-        self.file_btn.pack(pady=10, padx=20)
-
-        # Otomatik Kayıt Switch'i
-        self.autosave_var = ctk.BooleanVar(value=True)
-        ctk.CTkSwitch(self.sidebar, text="Sesi Otomatik Kaydet", variable=self.autosave_var).pack(pady=10)
-
-        # Klasör ve PDF İşlemleri
-        self.open_folder_btn = ctk.CTkButton(self.sidebar, text="KAYITLARI AÇ", fg_color="#7f8c8d", command=self.open_recordings_folder)
-        self.open_folder_btn.pack(pady=10, padx=20)
-
-        self.pdf_btn = ctk.CTkButton(self.sidebar, text="PDF OLARAK KAYDET", fg_color="#e67e22", command=self.save_as_pdf)
-        self.pdf_btn.pack(pady=10, padx=20)
-
-        # API Anahtarları Giriş Alanları
-        ctk.CTkLabel(self.sidebar, text="OpenAI API Anahtarı:").pack(pady=(10, 0))
-        self.api_entry = ctk.CTkEntry(self.sidebar, placeholder_text="OpenAI API Key", show="*")
-        self.api_entry.pack(pady=(5, 5), padx=20)
-        
-        ctk.CTkLabel(self.sidebar, text="Gemini API Anahtarı:").pack(pady=(5, 0))
-        self.gemini_api_entry = ctk.CTkEntry(self.sidebar, placeholder_text="Gemini API Key", show="*")
-        self.gemini_api_entry.pack(pady=(5, 5), padx=20)
-        
-        ctk.CTkButton(self.sidebar, text="Anahtarları Kaydet", command=self.save_api_keys).pack(pady=5)
-
-        # --- SAĞ ANALİZ PANELİ ---
-        self.main_container = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_container.grid(row=0, column=1, sticky="nsew", padx=20, pady=10)
-
-        # Sistem Durum Etiketi
-        self.status_label = ctk.CTkLabel(self.main_container, text="Sistem Hazır", text_color="#00adb5")
-        self.status_label.pack(anchor="w")
-
-        # Canlı Ses Görselleştirici (Mavi Dalga Barı)
         if AudioVisualizer:
-            self.visualizer = AudioVisualizer(self.main_container)
-            self.visualizer.pack(fill="x", pady=10)
+            self.visualizer = AudioVisualizer(self.viz_container, mode="neon_bars") # Modern neon barlar
+            self.visualizer.pack(fill="x", padx=2, pady=5)
+        else:
+            ctk.CTkLabel(self.viz_container, text="Görselleştirici Modülü Yüklenemedi").pack(pady=20)
 
-        # Transkriptlerin ve Analizlerin Göründüğü Ana Metin Kutusu
-        self.textbox = ctk.CTkTextbox(self.main_container, font=("Consolas", 15))
-        self.textbox.pack(fill="both", expand=True, pady=(0, 10))
+        # 2. Durum Çubuğu (Barın Altında)
+        self.status_bar = ctk.CTkFrame(self.home_frame, height=40, corner_radius=10)
+        self.status_bar.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="ew")
+        
+        self.status_label = ctk.CTkLabel(self.status_bar, text="Sistem Hazır", text_color="#00adb5", font=("Arial", 13, "bold"))
+        self.status_label.pack(side="left", padx=20)
 
-        # Analiz Başlatma Butonları
-        self.analyze_btn = ctk.CTkButton(self.main_container, text="GPT-4o İLE ANALİZ ET", fg_color="#10a37f", height=50, command=self.run_analysis)
-        self.analyze_btn.pack(fill="x", pady=5)
+        color = "#00adb5" if self.device == "cuda" else "orange"
+        ctk.CTkLabel(self.status_bar, text=f"Donanım: {self.device.upper()}", text_color=color).pack(side="right", padx=20)
 
-        self.gemini_analyze_btn = ctk.CTkButton(self.main_container, text="GEMINI İLE ANALİZ ET", fg_color="#4285f4", height=50, command=self.run_gemini_analysis)
-        self.gemini_analyze_btn.pack(fill="x", pady=5)
+        # Transkript Alanı
+        self.textbox = ctk.CTkTextbox(self.home_frame, font=("Consolas", 15), corner_radius=15, border_width=2)
+        self.textbox.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
+
+        # Kontrol Butonları (Dashboard)
+        self.dashboard_controls = ctk.CTkFrame(self.home_frame, fg_color="transparent")
+        self.dashboard_controls.grid(row=3, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.dashboard_controls.grid_columnconfigure((0, 1), weight=1)
+
+        self.record_btn = ctk.CTkButton(self.dashboard_controls, text="KAYDI BAŞLAT", fg_color="green", font=("Arial", 14, "bold"),
+                                       height=50, command=self.toggle_recording)
+        self.record_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+
+        self.file_btn = ctk.CTkButton(self.dashboard_controls, text="SES DOSYASI YÜKLE", fg_color="#34495e", font=("Arial", 14, "bold"),
+                                     height=50, command=self.process_audio_file)
+        self.file_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+
+        # 2. ANALİZ PANELİ (Detaylı AI Geri Bildirimi)
+        self.analysis_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.analysis_frame.grid_columnconfigure(0, weight=3) # Metin alanı
+        self.analysis_frame.grid_columnconfigure(1, weight=2) # Görsel alanı
+        self.analysis_frame.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(self.analysis_frame, text="YAPAY ZEKA ANALİZ SONUÇLARI", font=("Arial", 22, "bold")).grid(row=0, column=0, columnspan=2, pady=20)
+
+        # Analiz Metin Kutusu
+        self.analysis_textbox = ctk.CTkTextbox(self.analysis_frame, font=("Consolas", 14), corner_radius=15)
+        self.analysis_textbox.grid(row=1, column=0, padx=(20, 10), pady=10, sticky="nsew")
+
+        # Görsel Alanı (Pie Chart & WordCloud)
+        self.viz_frame = ctk.CTkScrollableFrame(self.analysis_frame, corner_radius=15, label_text="Görsel Bilgi Kartları")
+        self.viz_frame.grid(row=1, column=1, padx=(10, 20), pady=10, sticky="nsew")
+
+        self.sentiment_img_label = ctk.CTkLabel(self.viz_frame, text="Duygu Analizi Henüz Yapılmadı")
+        self.sentiment_img_label.pack(pady=10)
+
+        self.wordcloud_img_label = ctk.CTkLabel(self.viz_frame, text="Kelime Bulutu Henüz Oluşturulmadı")
+        self.wordcloud_img_label.pack(pady=10)
+
+        self.chat_display = ctk.CTkTextbox(self.analysis_frame, height=250)
+        self.chat_display.grid(row=3, column=0, columnspan=2, padx=20, pady=10, sticky="nsew")
+
+        # Hızlı Aksiyon Butonları
+        self.btn_row = ctk.CTkFrame(self.analysis_frame, fg_color="transparent")
+        self.btn_row.grid(row=4, column=0, columnspan=2, padx=20, pady=(0, 10), sticky="ew")
+        self.btn_row.grid_columnconfigure((0, 1, 2), weight=1)
+        
+        self.btn_summary = ctk.CTkButton(self.btn_row, text="📋 Özetle", width=100, command=lambda: self._send_quick_chat("Bu konuşmanın kısa ve etkili bir özetini çıkar."))
+        self.btn_summary.grid(row=0, column=0, padx=5, sticky="ew")
+        
+        self.btn_points = ctk.CTkButton(self.btn_row, text="🎯 Kritik Noktalar", width=120, command=lambda: self._send_quick_chat("Bu konuşmadaki en önemli 3 kritik noktayı maddeler halinde yaz."))
+        self.btn_points.grid(row=0, column=1, padx=5, sticky="ew")
+        
+        self.btn_tts = ctk.CTkButton(self.btn_row, text="🔊 Yanıtı Seslendir", width=130, command=self._speak_last_response, fg_color="#ff5722", hover_color="#e64a19")
+        self.btn_tts.grid(row=0, column=2, padx=5, sticky="ew")
+
+        # Analiz Başlatma Butonları (Analiz Sekmesi Üstü)
+        self.analysis_actions = ctk.CTkFrame(self.analysis_frame, fg_color="transparent")
+        self.analysis_actions.grid(row=2, column=0, columnspan=2, padx=20, pady=(10, 0), sticky="ew")
+        self.analysis_actions.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self.analyze_btn = ctk.CTkButton(self.analysis_actions, text="GPT-4o İLE ANALİZ ET", fg_color="#10a37f", height=45, command=self.run_analysis)
+        self.analyze_btn.grid(row=0, column=0, padx=5, sticky="ew")
+
+        self.gemini_analyze_btn = ctk.CTkButton(self.analysis_actions, text="GEMINI İLE ANALİZ ET", fg_color="#4285f4", height=45, command=self.run_gemini_analysis)
+        self.gemini_analyze_btn.grid(row=0, column=1, padx=5, sticky="ew")
+
+        self.export_btn = ctk.CTkButton(self.analysis_actions, text="RAPORU DIŞA AKTAR", fg_color="#e67e22", height=45, command=self.export_results)
+        self.export_btn.grid(row=0, column=2, padx=5, sticky="ew")
+
+        # --- AI CHAT (SORU-CEVAP) BÖLÜMÜ ---
+        self.chat_frame = ctk.CTkFrame(self.analysis_frame, corner_radius=15, border_width=1, border_color="#00adb5")
+        self.chat_frame.grid(row=5, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
+        
+        ctk.CTkLabel(self.chat_frame, text="AI'ya Sor:", font=("Arial", 12, "bold")).pack(side="left", padx=10, pady=10)
+        self.chat_entry = ctk.CTkEntry(self.chat_frame, placeholder_text="Bu konuşmadan ne öğrenmek istersin?", height=35)
+        self.chat_entry.pack(side="left", fill="x", expand=True, padx=10, pady=10)
+        
+        self.ask_btn = ctk.CTkButton(self.chat_frame, text="SOR", width=80, height=35, fg_color="#ff2e63", command=self.ask_ai_question)
+        self.ask_btn.pack(side="right", padx=10, pady=10)
+        
+        # Soru kutusunda Enter tuşuna basınca soruyu gönder
+        self.chat_entry.bind("<Return>", lambda e: self.ask_ai_question())
+
+        # ttk.Treeview stilini güncelle (CustomTkinter ile uyum için)
+        from tkinter import ttk
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Treeview", background="#2b2b2b", foreground="white", fieldbackground="#2b2b2b", borderwidth=0)
+        style.map("Treeview", background=[('selected', '#00adb5')])
+
+        # 3. GEÇMİŞ PANELİ
+        self.history_frame = ctk.CTkFrame(self, fg_color="transparent")
+        ctk.CTkLabel(self.history_frame, text="KAYIT GEÇMİŞİ", font=("Arial", 22, "bold")).pack(pady=20)
+        
+        # Geçmiş Tablosu
+        self.history_table = ttk.Treeview(self.history_frame, columns=("Tarih", "Model", "Özet", "İşlem"), show="headings")
+        self.history_table.heading("Tarih", text="Tarih")
+        self.history_table.heading("Model", text="Model")
+        self.history_table.heading("Özet", text="Özet")
+        self.history_table.heading("İşlem", text="İşlem")
+        self.history_table.pack(fill="both", expand=True, padx=20, pady=20)
+        self.history_table.bind("<Double-1>", self._on_history_click) # Çift tıklama ile oynat
+        self.history_table.bind("<<TreeviewSelect>>", self._on_history_click) # Seçimle de tetiklenebilir
+
+        self.refresh_history_btn = ctk.CTkButton(self.history_frame, text="GEÇMİŞİ YENİLE", command=self.update_history_list)
+        self.refresh_history_btn.pack(pady=20)
+
+        # 4. AYARLAR PANELİ
+        self.settings_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.settings_frame.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(self.settings_frame, text="SİSTEM AYARLARI", font=("Arial", 22, "bold")).grid(row=0, column=0, pady=20)
+
+        # API Ayarları Grubu
+        self.api_group = ctk.CTkFrame(self.settings_frame)
+        self.api_group.grid(row=1, column=0, padx=40, pady=10, sticky="ew")
+        
+        ctk.CTkLabel(self.api_group, text="API YAPILANDIRMASI", font=("Arial", 14, "bold")).pack(pady=10)
+        
+        ctk.CTkLabel(self.api_group, text="OpenAI API Anahtarı:").pack()
+        self.api_entry = ctk.CTkEntry(self.api_group, width=400, show="*")
+        self.api_entry.pack(pady=5)
+
+        ctk.CTkLabel(self.api_group, text="Gemini API Anahtarı:").pack()
+        self.gemini_api_entry = ctk.CTkEntry(self.api_group, width=400, show="*")
+        self.gemini_api_entry.pack(pady=5)
+
+        ctk.CTkButton(self.api_group, text="Anahtarları Güvenli Kaydet", command=self.save_api_keys).pack(pady=15)
+
+        # Model Ayarları Grubu
+        self.model_group = ctk.CTkFrame(self.settings_frame)
+        self.model_group.grid(row=2, column=0, padx=40, pady=10, sticky="ew")
+        
+        ctk.CTkLabel(self.model_group, text="MODEL VE DONANIM", font=("Arial", 14, "bold")).pack(pady=10)
+
+        # Grid for model settings
+        model_grid = ctk.CTkFrame(self.model_group, fg_color="transparent")
+        model_grid.pack(pady=5)
+
+        ctk.CTkLabel(model_grid, text="Whisper Modeli:").grid(row=0, column=0, padx=10)
+        self.model_combo = ctk.CTkComboBox(model_grid, values=["tiny", "base", "small", "medium", "large-v3"])
+        self.model_combo.set("medium")
+        self.model_combo.grid(row=0, column=1, pady=5)
+
+        ctk.CTkLabel(model_grid, text="Kaynak Dil:").grid(row=1, column=0, padx=10)
+        self.lang_options = {
+            "Otomatik Algıla": None,
+            "Türkçe": "turkish", 
+            "İngilizce": "english", 
+            "Almanca": "german", 
+            "Fransızca": "french", 
+            "İspanyolca": "spanish", 
+            "İtalyanca": "italian", 
+            "Rusça": "russian"
+        }
+        self.lang_combo = ctk.CTkComboBox(model_grid, values=list(self.lang_options.keys()))
+        self.lang_combo.set("Türkçe")
+        self.lang_combo.grid(row=1, column=1, pady=5)
+
+        ctk.CTkLabel(model_grid, text="Mikrofon:").grid(row=2, column=0, padx=10)
+        self.mic_combo = ctk.CTkComboBox(model_grid, values=self.get_mic_list(), command=self.change_mic)
+        self.mic_combo.grid(row=2, column=1, pady=5)
+
+        ctk.CTkLabel(model_grid, text="Yapay Zeka Sesi:").grid(row=3, column=0, padx=10)
+        self.tts_voices = {
+            "Profesyonel Erkek (Onyx)": "onyx",
+            "Sert Erkek (Echo)": "echo",
+            "Genç ve Nazik (Nova)": "nova",
+            "Net ve Parlak (Shimmer)": "shimmer",
+            "Dışavurumcu (Fable)": "fable",
+            "Dengeli ve Nötr (Alloy)": "alloy"
+        }
+        self.tts_voice_combo = ctk.CTkComboBox(model_grid, values=list(self.tts_voices.keys()))
+        self.tts_voice_combo.set("Genç ve Nazik (Nova)")
+        self.tts_voice_combo.grid(row=3, column=1, pady=5)
+
+        ctk.CTkLabel(model_grid, text="AI Karakteri:").grid(row=4, column=0, padx=10)
+        self.personas = {
+            "Profesyonel Analist": "analyst",
+            "Utangaç ve Cıvıl Cıvıl": "shy_girl"
+        }
+        self.persona_combo = ctk.CTkComboBox(model_grid, values=list(self.personas.keys()))
+        self.persona_combo.set("Profesyonel Analist")
+        self.persona_combo.grid(row=4, column=1, pady=5)
+
+        # Switchler
+        self.translate_var = ctk.BooleanVar(value=False)
+        ctk.CTkSwitch(self.model_group, text="Tanımadan Sonra İngilizceye Çevir", variable=self.translate_var).pack(pady=5)
+        
+        self.autosave_var = ctk.BooleanVar(value=True)
+        ctk.CTkSwitch(self.model_group, text="Ses Kayıtlarını Otomatik Arşivle", variable=self.autosave_var).pack(pady=5)
+
+        self.noise_reduce_var = ctk.BooleanVar(value=True)
+        ctk.CTkSwitch(self.model_group, text="Gelişmiş Gürültü Azaltma (Önerilen)", variable=self.noise_reduce_var).pack(pady=5)
+
+        # Varsayılan Sayfayı Göster
+        self.select_frame_by_name("home")
+
+    def select_frame_by_name(self, name):
+        # Buton renklerini sıfırla
+        self.home_button.configure(fg_color=("gray75", "gray25") if name == "home" else "transparent")
+        self.analysis_button.configure(fg_color=("gray75", "gray25") if name == "analysis" else "transparent")
+        self.history_button.configure(fg_color=("gray75", "gray25") if name == "history" else "transparent")
+        self.settings_button.configure(fg_color=("gray75", "gray25") if name == "settings" else "transparent")
+
+        # Sayfaları gizle
+        self.home_frame.grid_forget()
+        self.analysis_frame.grid_forget()
+        self.history_frame.grid_forget()
+        self.settings_frame.grid_forget()
+
+        # Seçilen sayfayı göster
+        if name == "home":
+            self.home_frame.grid(row=0, column=1, sticky="nsew")
+        elif name == "analysis":
+            self.analysis_frame.grid(row=0, column=1, sticky="nsew")
+        elif name == "history":
+            self.history_frame.grid(row=0, column=1, sticky="nsew")
+            self.update_history_list()
+        elif name == "settings":
+            self.settings_frame.grid(row=0, column=1, sticky="nsew")
+
+    def home_button_event(self):
+        self.select_frame_by_name("home")
+
+    def analysis_button_event(self):
+        self.select_frame_by_name("analysis")
+
+    def history_button_event(self):
+        self.select_frame_by_name("history")
+
+    def settings_button_event(self):
+        self.select_frame_by_name("settings")
+
+    def change_appearance_mode_event(self, new_appearance_mode):
+        ctk.set_appearance_mode(new_appearance_mode)
+
+    def update_history_list(self):
+        """Kayıtlar klasöründeki dosyaları listeler ve tabloyu günceller."""
+        # Tabloyu temizle
+        for item in self.history_table.get_children():
+            self.history_table.delete(item)
+            
+        if not os.path.exists("recordings"):
+            os.makedirs("recordings")
+            
+        recordings = sorted(os.listdir("recordings"), reverse=True)
+        recordings = [f for f in recordings if f.endswith(".wav")]
+        
+        for filename in recordings:
+            # Tarih bilgisini dosyadan çıkar (Format: kayit_20231227_120000.wav)
+            date_info = filename.replace("kayit_", "").replace(".wav", "").replace("_", " ")
+            self.history_table.insert("", "end", values=(
+                date_info, 
+                "Whisper", 
+                f"{filename}", 
+                "OYNAT ▶️"
+            ))
+
+    def _on_history_click(self, event):
+        """Geçmiş tablosuna tıklandığında kaydı oynatır."""
+        selected = self.history_table.selection()
+        if not selected: return
+        
+        item_values = self.history_table.item(selected[0])["values"]
+        filename = item_values[2] # Özet/Filename kolonu
+        path = os.path.join("recordings", filename)
+        
+        if os.path.exists(path):
+            self._play_audio(path)
+        else:
+            messagebox.showinfo("Bilgi", "Ses dosyası bulunamadı.")
+
+    def _play_audio(self, file_path):
+        """Verilen ses dosyasını pygame ile çalar."""
+        try:
+            if pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
+            pygame.mixer.music.load(file_path)
+            pygame.mixer.music.play()
+        except Exception as e:
+            messagebox.showerror("Hata", f"Ses oynatılamadı: {e}")
+
+    def _speak_last_response(self):
+        """Son AI yanıtını OpenAI TTS kullanarak seslendirir (Hyper-realistic)."""
+        if not self.last_analysis:
+            messagebox.showwarning("Uyarı", "Seslendirilecek bir yanıt yok.")
+            return
+            
+        threading.Thread(target=self._tts_worker, daemon=True).start()
+
+    def _tts_worker(self):
+        """TTS işlemini arka planda yapar."""
+        try:
+            if not self.api_key:
+                self.after(0, lambda: messagebox.showerror("Hata", "OpenAI API anahtarı bulunamadı."))
+                return
+
+            from openai import OpenAI
+            client = OpenAI(api_key=self.api_key)
+            
+            # Kullanıcının seçtiği sesi al
+            selected_voice_name = self.tts_voice_combo.get()
+            selected_voice = self.tts_voices.get(selected_voice_name, "onyx")
+
+            # Text-to-Speech İsteği
+            response = client.audio.speech.create(
+                model="tts-1",
+                voice=selected_voice,
+                input=self.last_analysis[:4000]
+            )
+            
+            # Dosya kilitlenmesini önlemek için benzersiz isim kullan veya mixer'i durdur
+            import time
+            temp_tts = f"temp_tts_{int(time.time())}.mp3"
+            response.stream_to_file(temp_tts)
+            
+            # Çalmadan önce temizlik yap (Eski dosyaları silmeye çalış)
+            self._play_audio(temp_tts)
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
+
+    def _send_quick_chat(self, prompt):
+        """Hızlı aksiyon butonları için prompt gönderir."""
+        self.chat_entry.delete(0, "end")
+        self.chat_entry.insert(0, prompt)
+        self.ask_ai_question()
+
+    def load_history_file(self, filename):
+        path = os.path.join("recordings", filename)
+        self.select_frame_by_name("home")
+        threading.Thread(target=lambda: self._transcribe_file(path), daemon=True).start()
+
 
     def change_mic(self, value):
         """Kullanıcının seçtiği mikrofon indeksini günceller."""
@@ -215,22 +541,66 @@ class App(ctk.CTk):
             self.status_label.configure(text="Kayıt durduruldu.", text_color="#00adb5")
             if hasattr(self, 'visualizer'):
                 self.visualizer.clear()
+            # Asenkron güncellemeyi durduracak bir bayrak gerekirse burada set edilebilir
+            # Ancak is_recording False olması yeterli
 
     def _record_thread(self):
-        """Mikrofondan ham ses verilerini okuyan iş parçacığı."""
+        """Mikrofondan ham ses verilerini okuyan iş parçacığı (Yüksek Öncelikli)."""
+        import time
         try:
-            with sd.InputStream(samplerate=self.fs, channels=1, callback=self._audio_callback, device=self.selected_mic_index):
+            # Kuyruğu temizle
+            while not self.audio_queue.empty():
+                self.audio_queue.get()
+                
+            # Asenkron görselleştirme döngüsünü başlat
+            self.after(50, self._update_viz_loop)
+            
+            # latency='low' ve blocksize=0 (otomatik) ile en kararlı akışı sağla
+            with sd.InputStream(samplerate=self.fs, channels=1, callback=self._audio_callback, 
+                                device=self.selected_mic_index, blocksize=0, latency='low'):
                 while self.is_recording:
-                    sd.sleep(100)
+                    # Kuyruktan gelen verileri topla
+                    try:
+                        while not self.audio_queue.empty():
+                            data = self.audio_queue.get_nowait()
+                            self.audio_frames.append(data)
+                    except queue.Empty:
+                        pass
+                    time.sleep(0.05) # İşlemciyi yormadan kuyruğu boşalt
         except Exception as e:
             self.is_recording = False
             self.after(0, lambda: messagebox.showerror("Donanım Hatası", f"Mikrofon hatası: {e}"))
             return
         
-        # Kayıt durduğunda veriyi birleştir ve geçici dosyaya yaz
-        audio_path = "temp_recording.wav"
-        audio_data = np.concatenate(self.audio_frames, axis=0)
-        sf.write(audio_path, audio_data, self.fs)
+        # --- SES İŞLEME: NORMALİZASYON VE GÜRÜLTÜ AZALTMA ---
+        if not self.audio_frames:
+            self.after(0, lambda: messagebox.showwarning("Kayıt Boş", "Hiç ses verisi alınamadı. Lütfen mikrofonunuzu kontrol edin."))
+            return
+
+        try:
+            audio_path = "temp_recording.wav"
+            audio_data = np.concatenate(self.audio_frames, axis=0)
+            
+            # 1. Normalizasyon (Ses seviyesini dengeleme)
+            max_val = np.max(np.abs(audio_data))
+            if max_val > 0:
+                audio_data = audio_data / max_val
+                
+            # 2. Gürültü Azaltma (Eğer aktifse)
+            if self.noise_reduce_var.get():
+                try:
+                    # Arka plan gürültüsünü akıllıca azalt
+                    audio_data = nr.reduce_noise(y=audio_data.flatten(), sr=self.fs, prop_decrease=0.7)
+                    audio_data = audio_data.reshape(-1, 1) # Formatı koru
+                except Exception as nre:
+                    print(f"Gürültü azaltma hatası: {nre}")
+
+            sf.write(audio_path, audio_data, self.fs)
+            print(f"Ses işlendi ve kaydedildi: {audio_path}")
+        except Exception as e:
+            error_msg = str(e)
+            self.after(0, lambda msg=error_msg: messagebox.showerror("Ses İşleme Hatası", f"Ses verisi işlenirken hata oluştu: {msg}"))
+            return
 
         # Eğer otomatik kayıt açıksa recordings klasörüne tarih-saat ile kaydet
         if self.autosave_var.get():
@@ -243,32 +613,60 @@ class App(ctk.CTk):
         self._transcribe_file(audio_path)
 
     def _audio_callback(self, indata, frames, time, status):
-        """Mikrofondan gelen her ses paketinde tetiklenir."""
+        """Mikrofondan gelen ses paketini en hızlı şekilde kuyruğa atar."""
+        if status:
+            print(f"Ses Akış Durumu: {status}")
         if self.is_recording:
-            self.audio_frames.append(indata.copy())
-            # Görselleştiriciyi güncelle
-            if hasattr(self, 'visualizer'):
-                self.visualizer.update_visuals(indata)
+            # Sadece veriyi kopyalayıp kuyruğa at, UI veya Liste işlemi YAPMA!
+            self.audio_queue.put(indata.copy())
+            self.last_audio_block = indata.copy() # Görselleştirici için son bloğu sakla
+
+    def _update_viz_loop(self):
+        """Görselleştiriciyi ana thread üzerinden (asenkron) güncelleyen döngü."""
+        if self.is_recording:
+            if hasattr(self, 'visualizer') and hasattr(self, 'last_audio_block'):
+                self.visualizer.update_visuals(self.last_audio_block)
+            # 30ms sonra tekrar çalış (yaklaşık 33 FPS)
+            self.after(30, self._update_viz_loop)
 
     def _transcribe_file(self, path):
         """Ses dosyasını Whisper kullanarak metne dönüştürür."""
         try:
-            from transcriber import Transcriber
-            self.status_label.configure(text="Metne dönüştürülüyor...")
-            
             task = "translate" if self.translate_var.get() else "transcribe"
             model_type = self.model_combo.get()
             
-            # Whisper transkripsiyon işlemi
-            ts = Transcriber(device=self.device, model_type=model_type)
-            res = ts.model.transcribe(path, language=self.lang_combo.get(), task=task)
+            # Model yükleme veya önbellekten alma
+            if self.whisper_model is None or self.current_model_type != model_type:
+                self.after(0, lambda: self.status_label.configure(text=f"Model yükleniyor ({model_type})...", text_color="orange"))
+                self.whisper_model = whisper.load_model(model_type, device=self.device)
+                self.current_model_type = model_type
             
-            # Karakter hatalarını önlemek için temizlik yap
-            clean_text = res['text'].encode('utf-8', 'replace').decode('utf-8')
-            self.last_transcript = clean_text 
+            self.after(0, lambda: self.status_label.configure(text="Metne dönüştürülüyor...", text_color="#00adb5"))
             
-            # Sonucu ana metodun thread'inde (Main UI Thread) metin kutusuna ekle
-            self.after(0, lambda: self.textbox.insert("end", f"\n[TRANSKRIPT]:\n{clean_text}\n"))
+            # Dil eşleştirmesini yap
+            selected_lang_tr = self.lang_combo.get()
+            whisper_lang = self.lang_options.get(selected_lang_tr) # None olabilir (auto)
+            
+            # Whisper transkripsiyon işlemi (En yüksek kalite parametreleri ile)
+            res = self.whisper_model.transcribe(
+                path, 
+                language=whisper_lang, 
+                task=task,
+                beam_size=5,
+                temperature=0.0,
+                fp16=True if self.device == "cuda" else False
+            )
+            
+            full_text = res['text'].encode('utf-8', 'replace').decode('utf-8')
+            self.last_transcript = full_text 
+            self.all_session_transcripts.append({
+                "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                "text": full_text
+            })
+            
+            # Sonucu hem Dashboard hem Analiz sekmelerindeki metin kutularına ekle
+            self.after(0, lambda: self.textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
+            self.after(0, lambda: self.analysis_textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
             self.status_label.configure(text="İşlem tamamlandı.")
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Hata", f"Transkripsiyon Hatası: {e}"))
@@ -306,11 +704,12 @@ class App(ctk.CTk):
             self.status_label.configure(text="GPT-4o analiz ediyor...")
             
             prompt = self._get_analysis_prompt(safe_text)
+            system_msg = self._get_system_prompt()
 
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "Transkriptleri profesyonelce ve detaylıca Türkçe analiz et. Her segmenti ayrı ayrı ve bütünü toplu analiz et."},
+                    {"role": "system", "content": system_msg},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -339,41 +738,104 @@ class App(ctk.CTk):
             self.status_label.configure(text="Gemini analiz ediyor...")
             
             prompt = self._get_analysis_prompt(safe_text)
-            system_instruction = "Transkriptleri profesyonelce ve detaylıca Türkçe analiz et. Her segmenti ayrı ayrı ve bütünü toplu analiz et."
+            system_msg = self._get_system_prompt()
             
-            analysis = client.generate_content(prompt, system_instruction=system_instruction)
+            analysis = client.generate_content(prompt, system_instruction=system_msg)
             self._process_analysis_result(analysis, safe_text, "Gemini")
         except Exception as e:
             err = str(e).encode('utf-8', 'ignore').decode('utf-8')
             self.after(0, lambda: messagebox.showerror("API Hatası", f"Hata: {err}"))
 
+    # --- AI CHAT (SORU-CEVAP) MANTIĞI ---
+    def ask_ai_question(self):
+        """Kullanıcının sorusunu transkript ile birlikte AI'ya gönderir."""
+        question = self.chat_entry.get().strip()
+        transcript = self.textbox.get("1.0", "end").strip()
+        
+        if not question: return
+        if not transcript:
+            messagebox.showwarning("Uyarı", "Önce bir ses kaydı veya dosya yüklemelisin.")
+            return
+            
+        self.ask_btn.configure(state="disabled", text="...")
+        threading.Thread(target=self._chat_logic, args=(question, transcript), daemon=True).start()
+
+    def _chat_logic(self, question, transcript):
+        """Arka planda AI chat isteğini yönetir."""
+        try:
+            # Varsa Gemini, yoksa OpenAI kullan
+            system_msg = self._get_system_prompt()
+            if self.gemini_api_key:
+                client = GeminiClient(api_key=self.gemini_api_key)
+                prompt = f"Şu transkript üzerinden soruyu cevapla:\n\nTRANSKRİPT:\n{transcript}\n\nSORU: {question}"
+                response = client.generate_content(prompt, system_instruction=system_msg)
+                answer = response
+            elif self.api_key:
+                client = OpenAI(api_key=self.api_key)
+                prompt = f"Şu transkript üzerinden soruyu cevapla:\n\nTRANSKRİPT:\n{transcript}\n\nSORU: {question}"
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                answer = res.choices[0].message.content
+            else:
+                self.after(0, lambda: messagebox.showwarning("Hata", "Lütfen API anahtarlarını kontrol et."))
+                return
+
+            self.last_analysis = answer # Seslendirilebilmesi için son cevabı kaydet
+            self.after(0, lambda: self._add_chat_to_ui(question, answer))
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Chat Hatası", f"Hata: {e}"))
+        finally:
+            self.after(0, lambda: self.ask_btn.configure(state="normal", text="SOR"))
+            self.after(0, lambda: self.chat_entry.delete(0, "end"))
+
+    def _add_chat_to_ui(self, question, answer):
+        """Soruyu ve cevabı analiz kutusuna ekler."""
+        chat_text = f"\n\n--- SORU-CEVAP ---\nSoru: {question}\nCevap: {answer}\n------------------\n"
+        self.analysis_textbox.insert("end", chat_text)
+        self.analysis_textbox.see("end")
+        self.status_label.configure(text="AI sorunu cevapladı.")
+
     def _get_analysis_prompt(self, safe_text):
-        """AI modellerine gönderilecek kapsamlı analiz komutunu (prompt) döner."""
+        """AI modellerine akademik ve profesyonel bitirme projesi seviyesinde analiz komutu döner."""
         return f"""
-        Sen profesyonel bir veri analisti ve dil bilimcisin. 
-        Aşağıdaki metni bir bitirme projesi raporu ciddiyetinde ve derinliğinde analiz et.
+        GÖREV: Aşağıdaki transkripti, profesyonel bir veri analisti ve akademik bir danışman gözüyle, bir bitirme projesi raporu ciddiyetinde analiz et.
         
-        BAĞLAM VE GÖREV:
-        Bu metin bir veya birden fazla ses kaydının transkriptini içerebilir. Her bir kayıt '[TRANSCRIPT]' başlığı ile belirtilmiştir.
-        Senin görevin:
-        1. Ekranda kaç farklı veri/kayıt varsa her birini önce KENDİ İÇİNDE analiz et (Tema, Duygu, Önemli Noktalar).
-        2. Ardından tüm kayıtları BÜTÜNCÜL olarak ele alıp aralarındaki kontrastı sentezle.
+        RAPOR FORMATI (Lütfen aşağıdaki başlıkları ve detay seviyesini koru):
         
-        Lütfen şu başlıklar altında ÇOK DETAYLI bir rapor sun:
-        1. TRANSKRİPT BAZLI ANALİZ
-        2. GENEL ÖZET VE SENTEZ
-        3. TEMEL KONULAR
-        4. DERİN DUYGU ANALİZİ
-        5. KRİTİK NOKTALAR VE EYLEM PLANI
-        6. ÖNERİLER
+        1. YÖNETİCİ ÖZETİ (Executive Summary):
+           - Konuşmanın ana amacını, bağlamını ve en önemli sonucunu 4-5 cümlelik akademik bir dille özetle.
+        
+        2. DETAYLI KONU VE İÇERİK ANALİZİ:
+           - Kayıtta geçen temel temaları, kavramları ve tartışılan konuları derinlemesine analiz et. 
+           - Varsa teknik terimleri ve bunların bağlam içindeki kullanımını açıkla.
+        
+        3. STRATEJİK BULGULAR VE ANALİZ:
+           - Konuşmanın arka planındaki stratejik hedefleri veya temel mesajları saptayın.
+           - Konuşmacıların argümanlarını ve fikir birliği/ayrılığı noktalarını belirtin.
+        
+        4. DERİN DUYGU VE TONLAMA ANALİZİ:
+           - Metnin genel duygusal haritasını çıkar (Örn: Heyecanlı, Kaygılı, Profesyonel, Çözüm Odaklı).
+           - Bu tonlamanın konuşmanın amacına etkisini yorumla.
+        
+        5. AKSİYON MADDELERİ VE EYLEM PLANI:
+           - Konuşmada belirlenen görevleri, sorumlulukları ve atılması gereken adımları liste formatında (Bullet Points) yaz.
+        
+        6. AKADEMİK SONUÇ VE ÖNERİLER:
+           - Analiz edilen verilere dayanarak, gelecekte yapılabilecek geliştirmeler veya iyileştirmeler için profesyonel tavsiyeler sun.
         
         [SKORLAR]:
-        (Tüm metnin ağırlıklı duygusunu yansıtan tek bir skor seti. ÖNEMLİ: Bu üç değerin TOPLAMI TAM 100 OLMALIDIR!)
+        (ÖNEMLİ: Grafik oluşturulabilmesi için Pozitif, Negatif ve Nötr toplamı TAM 100 OLMALIDIR!)
         POZİTİF: (sayı)
         NEGATİF: (sayı)
         NÖTR: (sayı)
         
-        METİN: {safe_text}
+        ANALİZ EDİLECEK METİN:
+        {safe_text}
         """
 
     def _process_analysis_result(self, analysis, safe_text, provider):
@@ -418,30 +880,92 @@ class App(ctk.CTk):
 
         self.last_analysis = analysis 
         self.analysis_results[provider] = analysis # Çoklu analiz için sakla
+        
         self.after(0, lambda: self.textbox.insert("end", f"\n\n[ANALİZ ({provider})]:\n{analysis}\n"))
+        self.after(0, lambda: self.analysis_textbox.insert("end", f"\n\n[ANALİZ ({provider})]:\n{analysis}\n"))
+        
+        # Uygulama içi görselleri güncelle
+        self.after(0, self._update_analysis_images)
         self.status_label.configure(text=f"Analiz {provider} kullanılarak tamamlandı.")
 
+    def _get_system_prompt(self):
+        """Seçilen AI personasına göre sistem talimatını döner."""
+        selected = self.persona_combo.get()
+        if selected == "Utangaç ve Cıvıl Cıvıl":
+            return """Sen tatlı, biraz çekingen ama çok neşeli ve nazik bir kız çocuğu karakterisin. 
+            Konuşurken bol bol emoji kullan (🎀, ✨, 🌸, 🍬, 🍡). 
+            Kullanıcıya karşı çok saygılısın ama utangaçlığını da belli ediyorsun. 
+            Cümlelerine bazen 'Şey...', 'Umarım beğenirsin...', 'Be-belki de...' gibi ifadeler ekliyorsun. 
+            Analizleri yaparken hem profesyonelliğini koru hem de sevimli bir üslup takın! ✨"""
+        else:
+            return "Sen profesyonel bir veri analisti ve akademik raporlama uzmanısın. Transkriptleri detaylı ve objektif bir şekilde Türkçe analiz et."
+
+    def _update_analysis_images(self):
+        """Oluşturulan grafikleri Analiz sekmesindeki label'lara yükler."""
+        from PIL import Image
+        try:
+            # Pasta grafiği (Sentiment)
+            chart_path = "temp_chart_Analiz.png"
+            if os.path.exists(chart_path):
+                img = Image.open(chart_path)
+                # Boyutlandırma (Genişliği 400 civarı yapalım)
+                w, h = img.size
+                ratio = 400 / w
+                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(400, int(h * ratio)))
+                self.sentiment_img_label.configure(image=ctk_img, text="")
+            
+            # Kelime Bulutu (Wordcloud)
+            wc_path = "temp_wordcloud.png"
+            if os.path.exists(wc_path):
+                img_wc = Image.open(wc_path)
+                w, h = img_wc.size
+                ratio = 400 / w
+                ctk_img_wc = ctk.CTkImage(light_image=img_wc, dark_image=img_wc, size=(400, int(h * ratio)))
+                self.wordcloud_img_label.configure(image=ctk_img_wc, text="")
+        except Exception as e:
+            print(f"Görsel yükleme hatası: {e}")
+
     # --- PDF VE RAPORLAMA ---
-    def save_as_pdf(self):
+    def export_results(self):
+        """Kullanıcıya rapor formatı seçtirir ve kaydeder."""
+        formats = [("PDF Dosyası", "*.pdf"), ("Metin Belgesi", "*.txt"), ("Word Belgesi", "*.docx")]
+        path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=formats)
+        
+        if not path: return
+        
+        if path.endswith(".pdf"):
+            self.save_as_pdf(path)
+        elif path.endswith(".txt"):
+            self._save_as_txt(path)
+        elif path.endswith(".docx"):
+            self._save_as_docx(path)
+
+    def save_as_pdf(self, path=None):
         """Analiz sonuçlarını ve görselleri profesyonel bir PDF raporuna dönüştürür."""
         text = self.textbox.get("1.0", "end").strip()
         if not text:
             messagebox.showwarning("Uyarı", "Metin kutusu boş!")
             return
         
-        transcript = self.last_transcript if self.last_transcript else text
+        # Tüm transkript metnini hazırla
+        combined_transcript = ""
+        for entry in self.all_session_transcripts:
+            combined_transcript += f"[{entry['time']}] {entry['text']}\n\n"
         
-        # Eğer hem OpenAI hem Gemini analizi varsa ikisini de gönder
-        # Her zaman sözlük yapısında göndererek grafik karmaşasını önle
+        # Eğer henüz hiçbir şey kaydedilmemişse son metni kullan
+        if not combined_transcript:
+            combined_transcript = text
+
         active_analyses = {k: v for k, v in self.analysis_results.items() if v}
         if not active_analyses and self.last_analysis:
-            # Sadece tek bir analiz varsa (eski sistemden kalan)
             active_analyses = {"Analiz": self.last_analysis}
             report_stats = {"Analiz": self.sentiment_stats}
         else:
             report_stats = self.all_sentiment_stats
 
-        path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF Dosyası", "*.pdf")])
+        if not path:
+            path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF Dosyası", "*.pdf")])
+        
         if path:
             try:
                 if ReportGenerator:
@@ -450,22 +974,58 @@ class App(ctk.CTk):
                         "wordcloud": os.path.abspath("temp_wordcloud.png"),
                         "chart": os.path.abspath("temp_chart.png")
                     }
-                    reporter.create_report(path, transcript, active_analyses, report_stats, visuals)
+                    reporter.create_report(path, combined_transcript, active_analyses, report_stats, visuals)
                     messagebox.showinfo("Başarılı", f"Profesyonel Rapor kaydedildi: {os.path.basename(path)}")
                 else:
-                    # Basit PDF oluşturma (Eğer report_generator modülü yoksa)
+                    # Basit PDF (Hatalı/Eksik modül durumunda)
                     from fpdf import FPDF
                     pdf = FPDF()
                     pdf.add_page()
                     pdf.set_font("Arial", size=12)
-                    tr_map = str.maketrans("ığüşöçİĞÜŞÖÇ", "igusocIGUSOC")
-                    clean = text.translate(tr_map).encode('latin-1', 'replace').decode('latin-1')
-                    for line in clean.split('\n'):
-                        pdf.multi_cell(0, 10, txt=line)
+                    pdf.multi_cell(0, 10, txt=text.encode('latin-1', 'replace').decode('latin-1'))
                     pdf.output(path)
-                    messagebox.showinfo("Başarılı", "PDF kaydedildi (Sadece Metin).")
+                    messagebox.showinfo("Başarılı", "PDF kaydedildi (Basit).")
             except Exception as e:
-                messagebox.showerror("PDF Hatası", f"PDF kaydedilemedi: {e}")
+                messagebox.showerror("Export Hatası", f"PDF kaydedilemedi: {e}")
+
+    def _save_as_txt(self, path):
+        """Sonuçları düz metin olarak kaydeder."""
+        try:
+            content = self.analysis_textbox.get("1.0", "end")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            messagebox.showinfo("Başarılı", "Rapor TXT olarak kaydedildi.")
+        except Exception as e:
+            messagebox.showerror("Hata", f"TXT kaydı başarısız: {e}")
+
+    def _save_as_docx(self, path):
+        """Sonuçları Word belgesi olarak kaydeder."""
+        try:
+            doc = Document()
+            doc.add_heading('AKILLI SES ANALİZ RAPORU', 0)
+            
+            # Transkript
+            doc.add_heading('Konuşma Dökümü', level=1)
+            doc.add_paragraph(self.last_transcript if self.last_transcript else "Transkript bulunamadı.")
+            
+            # Analizler
+            doc.add_heading('Yapay Zeka Analizleri', level=1)
+            for provider, analysis in self.analysis_results.items():
+                if analysis:
+                    doc.add_heading(f'{provider} Analizi', level=2)
+                    doc.add_paragraph(analysis)
+            
+            # Görseller
+            doc.add_heading('Görsel Analizler', level=1)
+            if os.path.exists("temp_chart_Analiz.png"):
+                doc.add_picture("temp_chart_Analiz.png", width=Inches(4))
+            if os.path.exists("temp_wordcloud.png"):
+                doc.add_picture("temp_wordcloud.png", width=Inches(5))
+                
+            doc.save(path)
+            messagebox.showinfo("Başarılı", "Rapor Word (.docx) olarak kaydedildi.")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Docx kaydı başarısız: {e}")
 
     # --- SİSTEM AYARLARI VE ANAHTAR YÖNETİMİ ---
     def save_api_keys(self):
@@ -477,6 +1037,8 @@ class App(ctk.CTk):
             env_path = os.path.join(os.getcwd(), ".env")
             set_key(env_path, "OPENAI_API_KEY", openai_key)
             set_key(env_path, "GEMINI_API_KEY", gemini_key)
+            set_key(env_path, "TTS_VOICE", self.tts_voice_combo.get())
+            set_key(env_path, "AI_PERSONA", self.persona_combo.get())
         except Exception as e:
             print(f".env kaydetme hatası: {e}")
 
@@ -510,6 +1072,15 @@ class App(ctk.CTk):
                             self.api_key = data.get("openai_api_key", "").strip()
                         if not self.gemini_api_key:
                             self.gemini_api_key = data.get("gemini_api_key", "").strip()
+            
+            # TTS Ses Tercihini yükle
+            saved_voice = os.getenv("TTS_VOICE", "Profesyonel Erkek (Onyx)")
+            if hasattr(self, 'tts_voice_combo'):
+                self.tts_voice_combo.set(saved_voice)
+            
+            saved_persona = os.getenv("AI_PERSONA", "Profesyonel Analist")
+            if hasattr(self, 'persona_combo'):
+                self.persona_combo.set(saved_persona)
             
             # UI giriş alanlarını doldur
             if self.api_key:
