@@ -26,6 +26,7 @@ import noisereduce as nr
 import pygame
 import os
 import shutil
+import pywinstyles # Modern Windows pencere efektleri için
 
 # .env dosyasını yükle (API anahtarları için)
 load_dotenv()
@@ -43,6 +44,104 @@ except ImportError:
     AnalyticsGenerator = None
     ReportGenerator = None
     AudioVisualizer = None
+
+class SentimentTimeline(ctk.CTkFrame):
+    """Analiz sekmesi için etkileşimli duygu zaman çizelgesi."""
+    def __init__(self, master, textbox_to_scroll, **kwargs):
+        super().__init__(master, **kwargs)
+        self.textbox = textbox_to_scroll
+        self.segments = []
+        self.canvas = ctk.CTkCanvas(self, height=40, bg="#1a1a1a", highlightthickness=0)
+        self.canvas.pack(fill="x", padx=10, pady=5)
+        # Tıklama olayı geri yüklendi (User request)
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.tooltip = None
+
+    def update_timeline(self, segments):
+        """
+        segments: list of dicts like [{"text": "...", "sentiment": "pos/neg/neu", "index": float}]
+        """
+        self.segments = segments
+        self.canvas.delete("all")
+        if not segments: return
+
+        width = self.canvas.winfo_width()
+        if width <= 1: width = 600 # Fallback width
+
+        total_length = sum(len(s["text"]) for s in segments)
+        current_x = 0
+        
+        colors = {"pos": "#2ecc71", "neg": "#e74c3c", "neu": "#95a5a6"}
+        
+        for i, seg in enumerate(segments):
+            seg_len = len(seg["text"])
+            seg_width = (seg_len / total_length) * width
+            
+            x1 = current_x
+            x2 = current_x + seg_width
+            
+            color = colors.get(seg.get("sentiment", "neu"), "#95a5a6")
+            self.canvas.create_rectangle(x1, 5, x2, 35, fill=color, outline="", tags=f"seg_{i}")
+            
+            current_x += seg_width
+
+    def _on_click(self, event):
+        if not self.segments: return
+        
+        width = self.canvas.winfo_width()
+        click_ratio = event.x / width
+        
+        total_text = "".join(s["text"] for s in self.segments)
+        target_char_idx = int(click_ratio * len(total_text))
+        
+        # Metin kutusunda ilgili bölgeye ilerle
+        current_char_count = 0
+        for seg in self.segments:
+            current_char_count += len(seg["text"])
+            if current_char_count >= target_char_idx:
+                # Metni bul ve yanıp sönme efektini yap (Opsiyonel)
+                search_text = seg["text"][:30] # İlk 30 karakteri ara
+                idx = self.textbox.search(search_text, "1.0", "end")
+                if idx:
+                    self.textbox.see(idx)
+                    self.textbox.tag_add("highlight", idx, f"{idx} + {len(search_text)} chars")
+                    self.textbox.tag_config("highlight", background="#00adb5", foreground="white")
+                    self.after(1000, lambda: self.textbox.tag_remove("highlight", "1.0", "end"))
+                break
+
+class MicroAnimation:
+    """Durum çubuğu için küçük, şık animasyonlar."""
+    def __init__(self, parent_label):
+        self.label = parent_label
+        self.original_text = parent_label.cget("text")
+        self.anim_running = False
+        self.dots = 0
+
+    def start_loading(self, text=None):
+        if text: self.original_text = text
+        self.anim_running = True
+        self._animate_dots()
+
+    def start_pulse(self):
+        self.anim_running = True
+        self._animate_pulse(0)
+
+    def stop(self, final_text="Sistem Hazır"):
+        self.anim_running = False
+        self.label.configure(text=final_text)
+
+    def _animate_dots(self):
+        if not self.anim_running: return
+        self.dots = (self.dots + 1) % 4
+        self.label.configure(text=f"{self.original_text}{'.' * self.dots}")
+        self.label.after(500, self._animate_dots)
+
+    def _animate_pulse(self, step):
+        if not self.anim_running: return
+        # CustomTkinter'da direct alpha yok, alternatif renk değişimi
+        colors = ["#00adb5", "#008a91", "#00676d", "#004449", "#00676d", "#008a91"]
+        self.label.configure(text_color=colors[step % len(colors)])
+        self.label.after(150, lambda: self._animate_pulse(step + 1))
 
 class App(ctk.CTk):
     """
@@ -87,10 +186,28 @@ class App(ctk.CTk):
         # Arayüzü oluştur ve kayıtlı anahtarları yükle
         self.setup_ui()
         self.load_api_key()
+
+        # Animasyon Yöneticisi
+        self.animator = MicroAnimation(self.status_label)
+        
+        # Windows Modern Efektlerini Uygula (Glassmorphism)
+        try:
+            # Arka planı koyu ve pürüzsüz yap
+            pywinstyles.apply_style(self, "mica")
+            # Sol menüye hafif bir opaklık ver
+            pywinstyles.set_opacity(self.navigation_frame, value=0.9)
+        except Exception as pe:
+            print(f"Pencere stili hatası: {pe}")
         
         # Analiz Sonuçlarını Saklama (Çoklu PDF raporu için)
         self.analysis_results = {"OpenAI": "", "Gemini": ""}
         self.all_sentiment_stats = {"OpenAI": None, "Gemini": None}
+        
+        # Dil Öğrenme (Language Coach) Durumu
+        self.target_language = "İngilizce"
+        self.user_level = "A2 (Gelişmekte Olan)"
+        self.coach_mode = "Serbest Konuşma"
+        self.language_analysis_result = ""
         
     def get_default_mic(self):
         """Sistemdeki varsayılan mikrofonun indeksini bulur."""
@@ -127,7 +244,8 @@ class App(ctk.CTk):
         self.navigation_frame.grid_rowconfigure(5, weight=1)
 
         self.navigation_frame_label = ctk.CTkLabel(self.navigation_frame, text=" SES ANALİZ\nSİSTEMİ", 
-                                                 font=ctk.CTkFont(size=20, weight="bold"))
+                                                 font=ctk.CTkFont(size=20, weight="bold"),
+                                                 text_color="#00adb5") # Turkuaz vurgu
         self.navigation_frame_label.grid(row=0, column=0, padx=20, pady=20)
 
         # Navigasyon Butonları
@@ -146,10 +264,15 @@ class App(ctk.CTk):
                                           anchor="w", command=self.history_button_event)
         self.history_button.grid(row=3, column=0, sticky="ew")
 
+        self.language_button = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10, text="Dil Koçu (AI)",
+                                            fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
+                                            anchor="w", command=self.language_button_event)
+        self.language_button.grid(row=4, column=0, sticky="ew")
+
         self.settings_button = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10, text="Ayarlar",
                                             fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
                                             anchor="w", command=self.settings_button_event)
-        self.settings_button.grid(row=4, column=0, sticky="ew")
+        self.settings_button.grid(row=5, column=0, sticky="ew")
 
         # Görünüm Menüsü (Sidebar Alt Kısmı)
         self.appearance_mode_menu = ctk.CTkOptionMenu(self.navigation_frame, values=["Dark", "Light", "System"],
@@ -218,6 +341,12 @@ class App(ctk.CTk):
 
         self.sentiment_img_label = ctk.CTkLabel(self.viz_frame, text="Duygu Analizi Henüz Yapılmadı")
         self.sentiment_img_label.pack(pady=10)
+
+        # Sentiment Timeline (Yeni)
+        self.timeline_label = ctk.CTkLabel(self.viz_frame, text="Zaman Bazlı Duygu Dağılımı (Tıklanabilir):", font=("Arial", 11, "bold"))
+        self.timeline_label.pack(pady=(10, 0))
+        self.sentiment_timeline = SentimentTimeline(self.viz_frame, self.analysis_textbox, height=50, fg_color="transparent")
+        self.sentiment_timeline.pack(fill="x", padx=5)
 
         self.wordcloud_img_label = ctk.CTkLabel(self.viz_frame, text="Kelime Bulutu Henüz Oluşturulmadı")
         self.wordcloud_img_label.pack(pady=10)
@@ -291,7 +420,53 @@ class App(ctk.CTk):
         self.refresh_history_btn = ctk.CTkButton(self.history_frame, text="GEÇMİŞİ YENİLE", command=self.update_history_list)
         self.refresh_history_btn.pack(pady=20)
 
-        # 4. AYARLAR PANELİ
+        # 4. DİL KOÇU (AI LANGUAGE COACH) PANELİ
+        self.language_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.language_frame.grid_columnconfigure(0, weight=1)
+        self.language_frame.grid_rowconfigure(2, weight=1)
+
+        ctk.CTkLabel(self.language_frame, text="AI DİL KOÇU & MENTOR", font=("Arial", 22, "bold"), text_color="#00adb5").grid(row=0, column=0, pady=(20, 10))
+
+        # Dil Ayarları Üst Bar
+        self.lang_coach_settings = ctk.CTkFrame(self.language_frame)
+        self.lang_coach_settings.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
+        
+        ctk.CTkLabel(self.lang_coach_settings, text="Hedef Dil:").pack(side="left", padx=10, pady=10)
+        self.coach_lang_combo = ctk.CTkComboBox(self.lang_coach_settings, values=["İngilizce", "Almanca", "Fransızca", "İspanyolca", "İtalyanca", "Rusça"])
+        self.coach_lang_combo.set("İngilizce")
+        self.coach_lang_combo.pack(side="left", padx=5)
+
+        ctk.CTkLabel(self.lang_coach_settings, text="Seviye:").pack(side="left", padx=10)
+        self.coach_level_combo = ctk.CTkComboBox(self.lang_coach_settings, values=["A1 (Başlangıç)", "A2 (Temel)", "B1 (Orta)", "B2 (Üst Orta)", "C1 (İleri)"])
+        self.coach_level_combo.set("A2 (Temel)")
+        self.coach_level_combo.pack(side="left", padx=5)
+
+        ctk.CTkLabel(self.lang_coach_settings, text="Mod:").pack(side="left", padx=10)
+        self.coach_mode_combo = ctk.CTkComboBox(self.lang_coach_settings, values=["Serbest Konuşma", "Gramatik Düzeltme", "Kelime Dağarcığı Geliştirme"])
+        self.coach_mode_combo.set("Serbest Konuşma")
+        self.coach_mode_combo.pack(side="left", padx=5)
+
+        # Dil Koçu Geri Bildirim Alanı
+        self.language_textbox = ctk.CTkTextbox(self.language_frame, font=("Consolas", 15), corner_radius=15, border_width=2, border_color="#00adb5")
+        self.language_textbox.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
+        
+        # başlangıç mesajı
+        self.language_textbox.insert("1.0", "--- AI DİL KOÇU HAZIR ---\nLütfen bir ses kaydı yapın veya metin girin, ardından 'DİL ANALİZİ BAŞLAT' butonuna basın.\n")
+
+        # Aksiyon Butonları
+        self.coach_actions = ctk.CTkFrame(self.language_frame, fg_color="transparent")
+        self.coach_actions.grid(row=3, column=0, padx=20, pady=20, sticky="ew")
+        self.coach_actions.grid_columnconfigure((0, 1), weight=1)
+
+        self.run_coach_btn = ctk.CTkButton(self.coach_actions, text="🚀 DİL ANALİZİ BAŞLAT", fg_color="#00adb5", font=("Arial", 14, "bold"),
+                                          height=50, command=self.run_language_analysis)
+        self.run_coach_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+
+        self.speak_coach_btn = ctk.CTkButton(self.coach_actions, text="🔊 DÜZELTMELERİ SESLENDİR", fg_color="#ff5722", font=("Arial", 14, "bold"),
+                                            height=50, command=self._speak_language_response)
+        self.speak_coach_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+
+        # 5. AYARLAR PANELİ
         self.settings_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.settings_frame.grid_columnconfigure(0, weight=1)
         
@@ -387,12 +562,14 @@ class App(ctk.CTk):
         self.home_button.configure(fg_color=("gray75", "gray25") if name == "home" else "transparent")
         self.analysis_button.configure(fg_color=("gray75", "gray25") if name == "analysis" else "transparent")
         self.history_button.configure(fg_color=("gray75", "gray25") if name == "history" else "transparent")
+        self.language_button.configure(fg_color=("gray75", "gray25") if name == "language" else "transparent")
         self.settings_button.configure(fg_color=("gray75", "gray25") if name == "settings" else "transparent")
 
         # Sayfaları gizle
         self.home_frame.grid_forget()
         self.analysis_frame.grid_forget()
         self.history_frame.grid_forget()
+        self.language_frame.grid_forget()
         self.settings_frame.grid_forget()
 
         # Seçilen sayfayı göster
@@ -403,6 +580,8 @@ class App(ctk.CTk):
         elif name == "history":
             self.history_frame.grid(row=0, column=1, sticky="nsew")
             self.update_history_list()
+        elif name == "language":
+            self.language_frame.grid(row=0, column=1, sticky="nsew")
         elif name == "settings":
             self.settings_frame.grid(row=0, column=1, sticky="nsew")
 
@@ -414,6 +593,9 @@ class App(ctk.CTk):
 
     def history_button_event(self):
         self.select_frame_by_name("history")
+
+    def language_button_event(self):
+        self.select_frame_by_name("language")
 
     def settings_button_event(self):
         self.select_frame_by_name("settings")
@@ -531,14 +713,15 @@ class App(ctk.CTk):
         if not self.is_recording:
             self.is_recording = True
             self.record_btn.configure(text="KAYDI DURDUR", fg_color="red")
-            self.status_label.configure(text="Kaydediliyor...", text_color="red")
+            self.animator.start_pulse() # Animasyonu başlat
+            self.status_label.configure(text="Kaydediliyor...")
             self.audio_frames = []
             # Çakışmayı önlemek için kayıt işlemini ayrı bir thread'de başlat
             threading.Thread(target=self._record_thread, daemon=True).start()
         else:
             self.is_recording = False
             self.record_btn.configure(text="KAYDI BAŞLAT", fg_color="green")
-            self.status_label.configure(text="Kayıt durduruldu.", text_color="#00adb5")
+            self.animator.stop("Kayıt durduruldu.")
             if hasattr(self, 'visualizer'):
                 self.visualizer.clear()
             # Asenkron güncellemeyi durduracak bir bayrak gerekirse burada set edilebilir
@@ -637,11 +820,11 @@ class App(ctk.CTk):
             
             # Model yükleme veya önbellekten alma
             if self.whisper_model is None or self.current_model_type != model_type:
-                self.after(0, lambda: self.status_label.configure(text=f"Model yükleniyor ({model_type})...", text_color="orange"))
+                self.animator.start_loading(f"Model yükleniyor ({model_type})")
                 self.whisper_model = whisper.load_model(model_type, device=self.device)
                 self.current_model_type = model_type
             
-            self.after(0, lambda: self.status_label.configure(text="Metne dönüştürülüyor...", text_color="#00adb5"))
+            self.animator.start_loading("Metne dönüştürülüyor")
             
             # Dil eşleştirmesini yap
             selected_lang_tr = self.lang_combo.get()
@@ -667,7 +850,7 @@ class App(ctk.CTk):
             # Sonucu hem Dashboard hem Analiz sekmelerindeki metin kutularına ekle
             self.after(0, lambda: self.textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
             self.after(0, lambda: self.analysis_textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
-            self.status_label.configure(text="İşlem tamamlandı.")
+            self.animator.stop("İşlem tamamlandı.")
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Hata", f"Transkripsiyon Hatası: {e}"))
 
@@ -701,7 +884,7 @@ class App(ctk.CTk):
 
             safe_text = text.encode('utf-8', 'replace').decode('utf-8')
             client = OpenAI(api_key=self.api_key)
-            self.status_label.configure(text="GPT-4o analiz ediyor...")
+            self.animator.start_loading("GPT-4o analiz ediyor")
             
             prompt = self._get_analysis_prompt(safe_text)
             system_msg = self._get_system_prompt()
@@ -735,7 +918,7 @@ class App(ctk.CTk):
 
             safe_text = text.encode('utf-8', 'replace').decode('utf-8')
             client = GeminiClient(api_key=self.gemini_api_key)
-            self.status_label.configure(text="Gemini analiz ediyor...")
+            self.animator.start_loading("Gemini analiz ediyor")
             
             prompt = self._get_analysis_prompt(safe_text)
             system_msg = self._get_system_prompt()
@@ -828,15 +1011,139 @@ class App(ctk.CTk):
         6. AKADEMİK SONUÇ VE ÖNERİLER:
            - Analiz edilen verilere dayanarak, gelecekte yapılabilecek geliştirmeler veya iyileştirmeler için profesyonel tavsiyeler sun.
         
-        [SKORLAR]:
-        (ÖNEMLİ: Grafik oluşturulabilmesi için Pozitif, Negatif ve Nötr toplamı TAM 100 OLMALIDIR!)
+        [SKORLAR VE SEGMENTLER]:
+        (ÖNEMLİ: Grafik için Pozitif, Negatif ve Nötr toplamı TAM 100 olmalı!)
         POZİTİF: (sayı)
         NEGATİF: (sayı)
         NÖTR: (sayı)
         
-        ANALİZ EDİLECEK METİN:
+        (ÖNEMLİ: Zaman çizelgesi için metni küçük parçalara/sentences böl ve duygusunu şu formatta ham Python listesi olarak en sona ekle. Markdown kod blokları kullanma!)
+        SEGMENTS: [{{'text': '...', 'sentiment': 'pos/neg/neu'}}, ...]
+        
+        [ANALİZ EDİLECEK METİN]:
         {safe_text}
         """
+
+    # --- AI DİL KOÇU MANTIĞI ---
+    def run_language_analysis(self):
+        """Metin kutusundaki verileri AI Dil Koçu ile analiz eder."""
+        text = self.textbox.get("1.0", "end").strip()
+        if not text:
+            # Eğer dashboard boşsa kendi kutusuna bak
+            text = self.language_textbox.get("1.0", "end").replace("--- AI DİL KOÇU HAZIR ---\nLütfen bir ses kaydı yapın veya metin girin, ardından 'DİL ANALİZİ BAŞLAT' butonuna basın.\n", "").strip()
+        
+        if text:
+            threading.Thread(target=self._language_coach_logic, args=(text,), daemon=True).start()
+        else:
+            messagebox.showwarning("Uyarı", "Analiz edilecek bir metin veya kayıt bulunamadı.")
+
+    def _language_coach_logic(self, text):
+        """Arka planda Dil Koçu API isteğini yönetir."""
+        try:
+            # Varsa Gemini, yoksa OpenAI kullan
+            target_lang = self.coach_lang_combo.get()
+            level = self.coach_level_combo.get()
+            mode = self.coach_mode_combo.get()
+            
+            self.animator.start_loading(f"Dil Koçu ({target_lang}) analiz ediyor")
+            
+            prompt = self._get_language_coach_prompt(text, target_lang, level, mode)
+            system_msg = "Sen uzman bir dil eğitmeni ve polyglot bir mentorsun. Öğrencilerine destekleyici, öğretici ve profesyonel geri bildirimler verirsin."
+
+            if self.gemini_api_key:
+                client = GeminiClient(api_key=self.gemini_api_key)
+                response = client.generate_content(prompt, system_instruction=system_msg)
+                result = response
+            elif self.api_key:
+                client = OpenAI(api_key=self.api_key)
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                result = res.choices[0].message.content
+            else:
+                self.after(0, lambda: messagebox.showwarning("Hata", "Lütfen API anahtarlarını kontrol et."))
+                return
+
+            self.language_analysis_result = result
+            self.after(0, lambda: self._update_language_ui(result))
+            self.animator.stop("Dil analizi tamamlandı.")
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Dil Koçu Hatası", f"Hata: {e}"))
+
+    def _update_language_ui(self, result):
+        """Dil analizi sonucunu ekrana yazdırır."""
+        self.language_textbox.delete("1.0", "end")
+        self.language_textbox.insert("1.0", result)
+        self.language_textbox.see("1.0")
+        self.status_label.configure(text="Dil Koçu geri bildirimini sundu.")
+
+    def _get_language_coach_prompt(self, text, lang, level, mode):
+        """Özel dil eğitimi promptunu oluşturur."""
+        return f"""
+        GÖREV: Bir dil eğitmeni olarak aşağıdaki metni analiz et. 
+        Hedef Dil: {lang}
+        Öğrenci Seviyesi: {level}
+        Analiz Modu: {mode}
+
+        GİRDİ METNİ:
+        "{text}"
+
+        Lütfen şu yapıda geri bildirim ver:
+        
+        1. GENEL DEĞERLENDİRME:
+           - Öğrencinin kendini ifade etme yeteneğini ve akıcılığını seviyesine göre yorumla.
+        
+        2. HATALAR VE DÜZELTMELER:
+           - Gramer, yazım veya telaffuz (metin üzerinden) hatalarını listele.
+           - Hatalı cümleyi yaz, altına DOĞRU halini koy ve nedenini kısaca açıkla.
+        
+        3. ALTERNATİF İFADELER:
+           - "Bunu şu şekilde söylersen daha profesyonel/doğal duyulur" diyerek 2-3 alternatif sun.
+        
+        4. YENİ KELİME ÖNERİLERİ:
+           - Bu konuyla ilgili öğrencinin kullanabileceği 3-5 yeni kelime veya deyim (ve anlamları).
+        
+        5. EĞİTMEN NOTU:
+           - Öğrenciye bir sonraki adımı için motivasyon verici bir tavsiye.
+
+        (NOT: Yanıtın tamamı TÜRKÇE olsun, ancak örnek cümleler ve kelimeler {lang} dilinde olmalıdır.)
+        """
+
+    def _speak_language_response(self):
+        """Dil koçu yanıtını seslendirir."""
+        if not self.language_analysis_result:
+            messagebox.showwarning("Uyarı", "Seslendirilecek bir analiz sonucu yok.")
+            return
+            
+        # Sadece düzeltmeleri ve önerileri seslendirmek daha mantıklı olabilir 
+        # ama şimdilik tümünü gönderelim (OpenAI TTS sınırı 4000 karakter)
+        threading.Thread(target=self._language_tts_worker, daemon=True).start()
+
+    def _language_tts_worker(self):
+        try:
+            if not self.api_key:
+                self.after(0, lambda: messagebox.showerror("Hata", "OpenAI API anahtarı bulunamadı (TTS için gereklidir)."))
+                return
+
+            client = OpenAI(api_key=self.api_key)
+            selected_voice = self.tts_voices.get(self.tts_voice_combo.get(), "nova")
+
+            response = client.audio.speech.create(
+                model="tts-1",
+                voice=selected_voice,
+                input=self.language_analysis_result[:4000]
+            )
+            
+            import time
+            temp_tts = f"temp_tts_coach_{int(time.time())}.mp3"
+            response.stream_to_file(temp_tts)
+            self._play_audio(temp_tts)
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
 
     def _process_analysis_result(self, analysis, safe_text, provider):
         """AI'dan gelen analiz sonucunu işler ve görselleri üretir."""
@@ -846,6 +1153,23 @@ class App(ctk.CTk):
                 # Kelime bulutu oluştur
                 analyzer.generate_wordcloud(safe_text)
                 
+                # Segmentleri ayıkla ve metinden temizle
+                segments = []
+                if "SEGMENTS:" in analysis:
+                    import ast
+                    try:
+                        parts = analysis.split("SEGMENTS:")
+                        seg_part = parts[1].strip()
+                        analysis = parts[0].strip() # Metni temizle
+                        
+                        # Markdown temizliği (GPT bazen ``` ekleyebilir)
+                        seg_part = seg_part.replace("```python", "").replace("```json", "").replace("```", "").strip()
+                        
+                        segments = ast.literal_eval(seg_part)
+                        self.after(0, lambda: self.sentiment_timeline.update_timeline(segments))
+                    except Exception as e:
+                        print(f"Segment verisi okunamadı: {e}")
+
                 # AI yanıtından skorları ayıkla
                 pos, neg, neu = 33, 33, 34 
                 for line in analysis.split('\n'):
@@ -875,6 +1199,7 @@ class App(ctk.CTk):
                 
                 # Standart isimle de kaydet (eski uyumluluk/tekli mod için)
                 analyzer.generate_sentiment_chart(pos, neg, neu, output_path="temp_chart_Analiz.png")
+
             except Exception as ae:
                 print(f"Görsel Analiz Hatası: {ae}")
 
@@ -886,7 +1211,7 @@ class App(ctk.CTk):
         
         # Uygulama içi görselleri güncelle
         self.after(0, self._update_analysis_images)
-        self.status_label.configure(text=f"Analiz {provider} kullanılarak tamamlandı.")
+        self.animator.stop(f"Analiz {provider} ile tamamlandı.")
 
     def _get_system_prompt(self):
         """Seçilen AI personasına göre sistem talimatını döner."""
