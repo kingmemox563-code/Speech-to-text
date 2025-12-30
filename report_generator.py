@@ -143,3 +143,71 @@ class ReportGenerator:
         except Exception as e:
             print(f"PDF Kayıt Hatası: {e}")
             return None
+
+    def create_coach_report(self, filename, transcript, feedback, chat_history, metadata):
+        """
+        Dil Koçu analizini, geri bildirimleri ve chat geçmişini PDF raporuna dönüştürür.
+        """
+        pdf = PDFReport()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        
+        # --- 1. ÖĞRENCİ VE HEDEF BİLGİLERİ ---
+        pdf.set_font("ArialTR", 'B', 14)
+        pdf.set_text_color(41, 128, 185)
+        pdf.cell(0, 10, "1. DİL ÖĞRENİM PROFİLİ VE HEDEF", 0, 1, 'L')
+        
+        pdf.set_font("ArialTR", '', 11)
+        pdf.set_text_color(44, 62, 80)
+        info_text = f"Hedef Dil: {metadata.get('lang', 'Bilinmiyor')} | " \
+                    f"Mevcut Seviye: {metadata.get('level', 'Bilinmiyor')} | " \
+                    f"Çalışma Modu: {metadata.get('mode', 'Bilinmiyor')}"
+        pdf.cell(0, 10, info_text, 0, 1, 'L')
+        pdf.ln(5)
+
+        # --- 2. DİL KOÇU GERİ BİLDİRİMİ ---
+        pdf.set_font("ArialTR", 'B', 14)
+        pdf.set_text_color(41, 128, 185)
+        pdf.cell(0, 10, "2. AI DİL KOÇU ANALİZİ VE TAVSİYELER", 0, 1, 'L')
+        
+        pdf.set_font("ArialTR", '', 11)
+        pdf.set_text_color(0, 0, 0)
+        pdf.multi_cell(0, 7, feedback)
+        pdf.ln(10)
+
+        # --- 3. SORU-CEVAP VE MENTORLUK GEÇMİŞİ ---
+        if chat_history:
+            pdf.add_page()
+            pdf.set_font("ArialTR", 'B', 14)
+            pdf.set_text_color(41, 128, 185)
+            pdf.cell(0, 10, "3. SORU-CEVAP VE MENTORLUK GEÇMİŞİ", 0, 1, 'L')
+            
+            for q, a in chat_history:
+                pdf.ln(5)
+                pdf.set_font("ArialTR", 'B', 11)
+                pdf.set_text_color(231, 76, 60) # Kırmızımsı ton (Soru)
+                pdf.multi_cell(0, 7, f"Soru: {q}")
+                
+                pdf.set_font("ArialTR", '', 11)
+                pdf.set_text_color(0, 0, 0) # Siyah (Cevap)
+                pdf.multi_cell(0, 7, f"{a}")
+                pdf.ln(2)
+                pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+
+        # --- 4. ORİJİNAL KONUŞMA DÖKÜMÜ ---
+        if transcript:
+            pdf.add_page()
+            pdf.set_font("ArialTR", 'B', 14)
+            pdf.set_text_color(41, 128, 185)
+            pdf.cell(0, 10, "4. KONUŞMA DÖKÜMÜ (Transkript)", 0, 1, 'L')
+            
+            pdf.set_font("ArialTR", '', 9)
+            pdf.set_text_color(127, 140, 141)
+            pdf.multi_cell(0, 5, transcript)
+            
+        try:
+            pdf.output(filename)
+            return filename
+        except Exception as e:
+            print(f"PDF Koç Raporu Kayıt Hatası: {e}")
+            return None

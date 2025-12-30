@@ -208,6 +208,7 @@ class App(ctk.CTk):
         self.user_level = "A2 (Gelişmekte Olan)"
         self.coach_mode = "Serbest Konuşma"
         self.language_analysis_result = ""
+        self.coach_chat_history = [] # Soru-Cevap geçmişini saklamak için
         
     def get_default_mic(self):
         """Sistemdeki varsayılan mikrofonun indeksini bulur."""
@@ -464,7 +465,24 @@ class App(ctk.CTk):
 
         self.speak_coach_btn = ctk.CTkButton(self.coach_actions, text="🔊 DÜZELTMELERİ SESLENDİR", fg_color="#ff5722", font=("Arial", 14, "bold"),
                                             height=50, command=self._speak_language_response)
-        self.speak_coach_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+        self.speak_coach_btn.grid(row=0, column=1, padx=5, sticky="ew")
+
+        self.coach_pdf_btn = ctk.CTkButton(self.coach_actions, text="📄 PDF RAPOR AL", fg_color="#e67e22", font=("Arial", 14, "bold"),
+                                          height=50, command=self.save_coach_pdf)
+        self.coach_pdf_btn.grid(row=0, column=2, padx=(5, 0), sticky="ew")
+
+        # Dil Koçu AI Chat Alanı
+        self.coach_chat_frame = ctk.CTkFrame(self.language_frame, corner_radius=15, border_width=1, border_color="#00adb5")
+        self.coach_chat_frame.grid(row=4, column=0, padx=20, pady=(0, 20), sticky="ew")
+        
+        ctk.CTkLabel(self.coach_chat_frame, text="AI'ya Sor:", font=("Arial", 12, "bold")).pack(side="left", padx=10, pady=10)
+        self.coach_chat_entry = ctk.CTkEntry(self.coach_chat_frame, placeholder_text="Dil öğrenimi veya bu analiz hakkında ne öğrenmek istersin?", height=35)
+        self.coach_chat_entry.pack(side="left", fill="x", expand=True, padx=10, pady=10)
+        
+        self.coach_ask_btn = ctk.CTkButton(self.coach_chat_frame, text="SOR", width=80, height=35, fg_color="#ff2e63", command=self.ask_coach_ai_question)
+        self.coach_ask_btn.pack(side="right", padx=10, pady=10)
+        
+        self.coach_chat_entry.bind("<Return>", lambda e: self.ask_coach_ai_question())
 
         # 5. AYARLAR PANELİ
         self.settings_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -1032,10 +1050,14 @@ class App(ctk.CTk):
             # Eğer dashboard boşsa kendi kutusuna bak
             text = self.language_textbox.get("1.0", "end").replace("--- AI DİL KOÇU HAZIR ---\nLütfen bir ses kaydı yapın veya metin girin, ardından 'DİL ANALİZİ BAŞLAT' butonuna basın.\n", "").strip()
         
-        if text:
-            threading.Thread(target=self._language_coach_logic, args=(text,), daemon=True).start()
-        else:
-            messagebox.showwarning("Uyarı", "Analiz edilecek bir metin veya kayıt bulunamadı.")
+        if not text:
+            messagebox.showwarning("Uyarı", "Analiz edilecek metin yok!")
+            return
+            
+        self.language_analysis_result = ""
+        self.coach_chat_history = [] # Yeni analizde geçmişi sıfırla
+        self.run_coach_btn.configure(state="disabled", text="ANALİZ EDİLİYOR...")
+        threading.Thread(target=self._language_coach_logic, args=(text,), daemon=True).start()
 
     def _language_coach_logic(self, text):
         """Arka planda Dil Koçu API isteğini yönetir."""
@@ -1073,6 +1095,9 @@ class App(ctk.CTk):
             self.animator.stop("Dil analizi tamamlandı.")
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Dil Koçu Hatası", f"Hata: {e}"))
+        finally:
+            self.after(0, lambda: self.run_coach_btn.configure(state="normal", text="DİL ANALİZİ BAŞLAT"))
+
 
     def _update_language_ui(self, result):
         """Dil analizi sonucunu ekrana yazdırır."""
@@ -1084,32 +1109,20 @@ class App(ctk.CTk):
     def _get_language_coach_prompt(self, text, lang, level, mode):
         """Özel dil eğitimi promptunu oluşturur."""
         return f"""
-        GÖREV: Bir dil eğitmeni olarak aşağıdaki metni analiz et. 
-        Hedef Dil: {lang}
-        Öğrenci Seviyesi: {level}
-        Analiz Modu: {mode}
-
-        GİRDİ METNİ:
+        Sen profesyonel bir Dil Koçu ve Mentorusun. Kullanıcının şu anki seviyesi: {level}, hedef dili: {lang}. 
+        Şu anki çalışma modu: {mode}.
+        
+        Kullanıcının konuşma/yazı örneği:
         "{text}"
-
-        Lütfen şu yapıda geri bildirim ver:
         
-        1. GENEL DEĞERLENDİRME:
-           - Öğrencinin kendini ifade etme yeteneğini ve akıcılığını seviyesine göre yorumla.
+        Lütfen şunları sağla:
+        1. Gramer ve imla düzeltmeleri.
+        2. Daha doğal ve profesyonel ifade yöntemleri (alternatif cümleler).
+        3. Seviyeye uygun yeni kelime önerileri.
+        4. Telaffuz ipuçları (eğer gerekliyse).
+        5. Genel motivasyon ve bir sonraki adım için tavsiye.
         
-        2. HATALAR VE DÜZELTMELER:
-           - Gramer, yazım veya telaffuz (metin üzerinden) hatalarını listele.
-           - Hatalı cümleyi yaz, altına DOĞRU halini koy ve nedenini kısaca açıkla.
-        
-        3. ALTERNATİF İFADELER:
-           - "Bunu şu şekilde söylersen daha profesyonel/doğal duyulur" diyerek 2-3 alternatif sun.
-        
-        4. YENİ KELİME ÖNERİLERİ:
-           - Bu konuyla ilgili öğrencinin kullanabileceği 3-5 yeni kelime veya deyim (ve anlamları).
-        
-        5. EĞİTMEN NOTU:
-           - Öğrenciye bir sonraki adımı için motivasyon verici bir tavsiye.
-
+        Yanıtın samimi, öğretici ve cesaret verici olsun.
         (NOT: Yanıtın tamamı TÜRKÇE olsun, ancak örnek cümleler ve kelimeler {lang} dilinde olmalıdır.)
         """
 
@@ -1144,6 +1157,102 @@ class App(ctk.CTk):
             self._play_audio(temp_tts)
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
+
+    def ask_coach_ai_question(self):
+        """Dil Koçu sekmesinde kullanıcının sorduğu soruyu yanıtlar."""
+        question = self.coach_chat_entry.get().strip()
+        transcript = self.textbox.get("1.0", "end").strip()
+        
+        if not question: return
+            
+        self.coach_ask_btn.configure(state="disabled", text="...")
+        threading.Thread(target=self._coach_chat_logic, args=(question, transcript), daemon=True).start()
+
+    def _coach_chat_logic(self, question, transcript):
+        """Dil Koçu chat isteğini arka planda yürütür."""
+        try:
+            lang = self.coach_lang_combo.get()
+            level = self.coach_level_combo.get()
+            
+            # Dil Mentoru sistemi talimatı
+            system_msg = f"Sen uzman bir Dil Koçu ve Mentorluk asistanısın. Kullanıcı {lang} öğreniyor ve seviyesi {level}. " \
+                         f"Soruları sadece transkripte bağlı kalarak değil, genel dil eğitimi bilginle (kelime listeleri, stratejiler, gramer kuralları) bir mentor gibi cevapla."
+            
+            # Sohbet geçmişini derle
+            history_context = ""
+            for q, a in self.coach_chat_history[-5:]: # Son 5 mesajı al
+                history_context += f"Soru: {q}\nCevap: {a}\n"
+
+            prompt = f"Kullanıcı Seviyesi: {level}\nHedef Dil: {lang}\n"
+            if transcript:
+                prompt += f"Mevcut Konuşma Örneği: {transcript}\n"
+            
+            if history_context:
+                prompt += f"\nGeçmiş Konuşma:\n{history_context}"
+                
+            prompt += f"\nKullanıcının Yeni Sorusu: {question}"
+
+            # Gemini veya OpenAI kullan
+            if self.gemini_api_key:
+                client = GeminiClient(api_key=self.gemini_api_key)
+                response = client.generate_content(prompt, system_instruction=system_msg)
+                answer = response
+            elif self.api_key:
+                client = OpenAI(api_key=self.api_key)
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                answer = res.choices[0].message.content
+            else:
+                self.after(0, lambda: messagebox.showwarning("Hata", "API anahtarı bulunamadı."))
+                return
+
+            self.coach_chat_history.append((question, answer))
+            self.after(0, lambda: self._add_coach_chat_to_ui(question, answer))
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Koç Chat Hatası", f"Hata: {e}"))
+        finally:
+            self.after(0, lambda: self.coach_ask_btn.configure(state="normal", text="SOR"))
+            self.after(0, lambda: self.coach_chat_entry.delete(0, "end"))
+
+    def _add_coach_chat_to_ui(self, question, answer):
+        """Soruyu ve cevabı dil koçu metin kutusuna ekler."""
+        chat_text = f"\n\n❓ SORU: {question}\n💡 CEVAP: {answer}\n" \
+                    f"{'-'*30}\n"
+        self.language_textbox.insert("end", chat_text)
+        self.language_textbox.see("end")
+        self.status_label.configure(text="Dil Koçu sorunu cevapladı.")
+
+    def save_coach_pdf(self):
+        """Dil koçu analizini PDF olarak kaydeder."""
+        if not self.language_analysis_result:
+            messagebox.showwarning("Uyarı", "Önce bir dil analizi yapmalısınız.")
+            return
+            
+        path = filedialog.asksaveasfilename(defaultextension=".pdf", 
+                                          filetypes=[("PDF Dosyası", "*.pdf")],
+                                          initialfile=f"Dil_Kocu_Raporu_{datetime.datetime.now().strftime('%Y%m%d')}.pdf")
+        if not path: return
+
+        try:
+            if ReportGenerator:
+                reporter = ReportGenerator()
+                transcript = self.textbox.get("1.0", "end").strip()
+                metadata = {
+                    "lang": self.coach_lang_combo.get(),
+                    "level": self.coach_level_combo.get(),
+                    "mode": self.coach_mode_combo.get()
+                }
+                reporter.create_coach_report(path, transcript, self.language_analysis_result, self.coach_chat_history, metadata)
+                messagebox.showinfo("Başarılı", "Dil Koçu Raporu kaydedildi.")
+            else:
+                messagebox.showerror("Hata", "Rapor oluşturucu modülü eksik.")
+        except Exception as e:
+            messagebox.showerror("Hata", f"PDF oluşturulamadı: {e}")
 
     def _process_analysis_result(self, analysis, safe_text, provider):
         """AI'dan gelen analiz sonucunu işler ve görselleri üretir."""
