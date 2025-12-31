@@ -4,11 +4,14 @@ Bu proje, yapay zeka destekli bir ses kayıt, transkripsiyon (metne dönüştür
 
 ## 🚀 Öne Çıkan Özellikler
 
-- **Gerçek Zamanlı Ses Kaydı**: Mikrofon üzerinden yüksek kaliteli ses kaydı.
-- **Whisper Transkripsiyon**: Ses dosyalarını otomatik olarak metne dönüştürür (Türkçe dahil 7+ dil desteği).
-- **GPT-4o Analizi**: Transkript edilen metni; özet, ana konular, duygu analizi ve eylem planı olarak analiz eder.
-- **Görsel Analitik**: Kelime bulutu (WordCloud) ve duygu durum grafikleri (Sentiment Chart).
-- **Profesyonel PDF Raporlama**: Tüm analiz sonuçlarını ve grafikleri içeren kurumsal yapıda bir rapor oluşturur.
+- **Cyberpunk Glassmorphism Arayüzü**: Modern, neon pembe vurgulu ve şeffaf katmanlı premium tasarım.
+- **Gerçek Zamanlı Ses Kaydı**: Mikrofon üzerinden yüksek kaliteli ses kaydı ve dinamik görselleştirici.
+- **Auto-VAD (Otomatik Sessizlik Algılama)**: Konuşma bittiğinde kaydı otomatik durduran akıllı algoritma.
+- **AI Persona Sistemi**: Farklı karakterlerde (Sert Mentor, Teknoloji Gurusu vb.) analiz ve mentorluk.
+- **AI Dil Koçu (Mentor)**: Hedef dilde hata düzeltme, doğal ifade ve mentorluk desteği.
+- **Whisper Transkripsiyon**: Yerel olarak en yüksek doğrulukla metne dönüştürme.
+- **Görsel Analitik**: Kelime bulutu (WordCloud) ve %100 normalize edilmiş duygu durum grafikleri.
+- **Profesyonel PDF & Word Raporlama**: Tüm analizleri ve grafikleri içeren kurumsal yapıda raporlar.
 - **Donanım Uyumluluğu**: NVIDIA GPU (CUDA) ve CPU üzerinde optimize çalışma.
 
 ## 🛠 Kurulum ve Sistem Gereksinimleri

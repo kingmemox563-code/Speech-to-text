@@ -8,6 +8,7 @@ import customtkinter as ctk
 from tkinter import messagebox, filedialog, ttk
 import threading
 import queue
+import time
 import sounddevice as sd
 import soundfile as sf
 import json
@@ -210,6 +211,12 @@ class App(ctk.CTk):
         self.language_analysis_result = ""
         self.coach_chat_history = [] # Soru-Cevap geçmişini saklamak için
         
+        # Auto-VAD (Silence Detection) Ayarları
+        self.silence_threshold = 0.01 # Sessizlik eşiği (RMS)
+        self.silence_start_time = None
+        self.auto_vad_enabled = True # Varsayılan olarak açık
+        self.last_rms = 0
+        
     def get_default_mic(self):
         """Sistemdeki varsayılan mikrofonun indeksini bulur."""
         try:
@@ -245,8 +252,8 @@ class App(ctk.CTk):
         self.navigation_frame.grid_rowconfigure(5, weight=1)
 
         self.navigation_frame_label = ctk.CTkLabel(self.navigation_frame, text=" SES ANALİZ\nSİSTEMİ", 
-                                                 font=ctk.CTkFont(size=20, weight="bold"),
-                                                 text_color="#00adb5") # Turkuaz vurgu
+                                                 font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                                                 text_color="#ff007f") # Neon Pink vurgu
         self.navigation_frame_label.grid(row=0, column=0, padx=20, pady=20)
 
         # Navigasyon Butonları
@@ -301,14 +308,14 @@ class App(ctk.CTk):
         self.status_bar = ctk.CTkFrame(self.home_frame, height=40, corner_radius=10)
         self.status_bar.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="ew")
         
-        self.status_label = ctk.CTkLabel(self.status_bar, text="Sistem Hazır", text_color="#00adb5", font=("Arial", 13, "bold"))
+        self.status_label = ctk.CTkLabel(self.status_bar, text="Sistem Hazır", text_color="#ff007f", font=("Inter", 13, "bold"))
         self.status_label.pack(side="left", padx=20)
 
-        color = "#00adb5" if self.device == "cuda" else "orange"
+        color = "#ff007f" if self.device == "cuda" else "#ffea00"
         ctk.CTkLabel(self.status_bar, text=f"Donanım: {self.device.upper()}", text_color=color).pack(side="right", padx=20)
 
         # Transkript Alanı
-        self.textbox = ctk.CTkTextbox(self.home_frame, font=("Consolas", 15), corner_radius=15, border_width=2)
+        self.textbox = ctk.CTkTextbox(self.home_frame, font=("Inter", 15), corner_radius=15, border_width=2, border_color="#ff007f")
         self.textbox.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
 
         # Kontrol Butonları (Dashboard)
@@ -384,7 +391,7 @@ class App(ctk.CTk):
         self.export_btn.grid(row=0, column=2, padx=5, sticky="ew")
 
         # --- AI CHAT (SORU-CEVAP) BÖLÜMÜ ---
-        self.chat_frame = ctk.CTkFrame(self.analysis_frame, corner_radius=15, border_width=1, border_color="#00adb5")
+        self.chat_frame = ctk.CTkFrame(self.analysis_frame, corner_radius=15, border_width=1, border_color="#ff007f")
         self.chat_frame.grid(row=5, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
         
         ctk.CTkLabel(self.chat_frame, text="AI'ya Sor:", font=("Arial", 12, "bold")).pack(side="left", padx=10, pady=10)
@@ -402,7 +409,7 @@ class App(ctk.CTk):
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("Treeview", background="#2b2b2b", foreground="white", fieldbackground="#2b2b2b", borderwidth=0)
-        style.map("Treeview", background=[('selected', '#00adb5')])
+        style.map("Treeview", background=[('selected', '#ff007f')])
 
         # 3. GEÇMİŞ PANELİ
         self.history_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -426,7 +433,7 @@ class App(ctk.CTk):
         self.language_frame.grid_columnconfigure(0, weight=1)
         self.language_frame.grid_rowconfigure(2, weight=1)
 
-        ctk.CTkLabel(self.language_frame, text="AI DİL KOÇU & MENTOR", font=("Arial", 22, "bold"), text_color="#00adb5").grid(row=0, column=0, pady=(20, 10))
+        ctk.CTkLabel(self.language_frame, text="AI DİL KOÇU & MENTOR", font=("Inter", 22, "bold"), text_color="#ff007f").grid(row=0, column=0, pady=(20, 10))
 
         # Dil Ayarları Üst Bar
         self.lang_coach_settings = ctk.CTkFrame(self.language_frame)
@@ -448,7 +455,7 @@ class App(ctk.CTk):
         self.coach_mode_combo.pack(side="left", padx=5)
 
         # Dil Koçu Geri Bildirim Alanı
-        self.language_textbox = ctk.CTkTextbox(self.language_frame, font=("Consolas", 15), corner_radius=15, border_width=2, border_color="#00adb5")
+        self.language_textbox = ctk.CTkTextbox(self.language_frame, font=("Inter", 15), corner_radius=15, border_width=2, border_color="#ff007f")
         self.language_textbox.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
         
         # başlangıç mesajı
@@ -459,7 +466,7 @@ class App(ctk.CTk):
         self.coach_actions.grid(row=3, column=0, padx=20, pady=20, sticky="ew")
         self.coach_actions.grid_columnconfigure((0, 1), weight=1)
 
-        self.run_coach_btn = ctk.CTkButton(self.coach_actions, text="🚀 DİL ANALİZİ BAŞLAT", fg_color="#00adb5", font=("Arial", 14, "bold"),
+        self.run_coach_btn = ctk.CTkButton(self.coach_actions, text="🚀 DİL ANALİZİ BAŞLAT", fg_color="#ff007f", font=("Inter", 14, "bold"),
                                           height=50, command=self.run_language_analysis)
         self.run_coach_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
 
@@ -479,7 +486,7 @@ class App(ctk.CTk):
         self.coach_chat_entry = ctk.CTkEntry(self.coach_chat_frame, placeholder_text="Dil öğrenimi veya bu analiz hakkında ne öğrenmek istersin?", height=35)
         self.coach_chat_entry.pack(side="left", fill="x", expand=True, padx=10, pady=10)
         
-        self.coach_ask_btn = ctk.CTkButton(self.coach_chat_frame, text="SOR", width=80, height=35, fg_color="#ff2e63", command=self.ask_coach_ai_question)
+        self.coach_ask_btn = ctk.CTkButton(self.coach_chat_frame, text="SOR", width=80, height=35, fg_color="#ff007f", command=self.ask_coach_ai_question)
         self.coach_ask_btn.pack(side="right", padx=10, pady=10)
         
         self.coach_chat_entry.bind("<Return>", lambda e: self.ask_coach_ai_question())
@@ -556,6 +563,9 @@ class App(ctk.CTk):
         ctk.CTkLabel(model_grid, text="AI Karakteri:").grid(row=4, column=0, padx=10)
         self.personas = {
             "Profesyonel Analist": "analyst",
+            "Sert Mentor": "strict_mentor",
+            "Samimi Teknoloji Gurusu": "tech_guru",
+            "Akademik Gözlemci": "scholar",
             "Utangaç ve Cıvıl Cıvıl": "shy_girl"
         }
         self.persona_combo = ctk.CTkComboBox(model_grid, values=list(self.personas.keys()))
@@ -571,6 +581,9 @@ class App(ctk.CTk):
 
         self.noise_reduce_var = ctk.BooleanVar(value=True)
         ctk.CTkSwitch(self.model_group, text="Gelişmiş Gürültü Azaltma (Önerilen)", variable=self.noise_reduce_var).pack(pady=5)
+
+        self.auto_vad_var = ctk.BooleanVar(value=True)
+        ctk.CTkSwitch(self.model_group, text="Otomatik Sessizlik Algılama (Auto-VAD)", variable=self.auto_vad_var, command=self._toggle_auto_vad).pack(pady=5)
 
         # Varsayılan Sayfayı Göster
         self.select_frame_by_name("home")
@@ -725,7 +738,11 @@ class App(ctk.CTk):
         except:
             pass
 
-    # --- SES KAYIT VE İŞLEME MANTIĞI ---
+    def _toggle_auto_vad(self):
+        """Auto-VAD özelliğini açıp kapatır."""
+        self.auto_vad_enabled = self.auto_vad_var.get()
+        status = "açıldı" if self.auto_vad_enabled else "kapatıldı"
+        print(f"Auto-VAD {status}.")
     def toggle_recording(self):
         """Kayıt düğmesine basıldığında başlatma/durdurma işlemini yapar."""
         if not self.is_recording:
@@ -734,6 +751,11 @@ class App(ctk.CTk):
             self.animator.start_pulse() # Animasyonu başlat
             self.status_label.configure(text="Kaydediliyor...")
             self.audio_frames = []
+            
+            # VAD Durumlarını Sıfırla
+            self.silence_start_time = None
+            self.recording_start_time = time.time() # Kayıt başlangıç zamanı
+            
             # Çakışmayı önlemek için kayıt işlemini ayrı bir thread'de başlat
             threading.Thread(target=self._record_thread, daemon=True).start()
         else:
@@ -747,7 +769,6 @@ class App(ctk.CTk):
 
     def _record_thread(self):
         """Mikrofondan ham ses verilerini okuyan iş parçacığı (Yüksek Öncelikli)."""
-        import time
         try:
             # Kuyruğu temizle
             while not self.audio_queue.empty():
@@ -765,6 +786,23 @@ class App(ctk.CTk):
                         while not self.audio_queue.empty():
                             data = self.audio_queue.get_nowait()
                             self.audio_frames.append(data)
+                            
+                            # --- Auto-VAD İşlemi ---
+                            if self.auto_vad_enabled and (time.time() - self.recording_start_time > 3.0):
+                                rms = np.sqrt(np.mean(data**2))
+                                self.last_rms = rms
+                                
+                                if rms < self.silence_threshold:
+                                    if self.silence_start_time is None:
+                                        self.silence_start_time = time.time()
+                                    else:
+                                        silent_duration = time.time() - self.silence_start_time
+                                        if silent_duration > 3.0: # 3 saniye sessizlik
+                                            print("Auto-VAD: Sessizlik algılandı, kayıt durduruluyor.")
+                                            self.after(0, self.toggle_recording)
+                                            break
+                                else:
+                                    self.silence_start_time = None
                     except queue.Empty:
                         pass
                     time.sleep(0.05) # İşlemciyi yormadan kuyruğu boşalt
@@ -889,9 +927,17 @@ class App(ctk.CTk):
     # --- GPT-4o ANALİZ METOTLARI ---
     def run_analysis(self):
         """Metin kutusundaki verileri GPT-4o ile analiz etmek üzere gönderir."""
-        text = self.textbox.get("1.0", "end").strip()
-        if text:
-            threading.Thread(target=self._gpt_logic, args=(text,), daemon=True).start()
+        # Session geçmişini kullanarak zaman damgalı metin oluştur
+        text_with_timestamps = ""
+        for entry in self.all_session_transcripts:
+            text_with_timestamps += f"[{entry['time']}] {entry['text']}\n"
+        
+        # Eğer geçmiş boşsa (manuel düzeltme yapılmış olabilir), kutudaki ham metni al
+        if not text_with_timestamps:
+            text_with_timestamps = self.textbox.get("1.0", "end").strip()
+            
+        if text_with_timestamps:
+            threading.Thread(target=self._gpt_logic, args=(text_with_timestamps,), daemon=True).start()
 
     def _gpt_logic(self, text):
         """Arka planda OpenAI API isteğini yönetir."""
@@ -923,9 +969,16 @@ class App(ctk.CTk):
     # --- GEMINI ANALİZ METOTLARI ---
     def run_gemini_analysis(self):
         """Metin kutusundaki verileri Google Gemini ile analiz eder."""
-        text = self.textbox.get("1.0", "end").strip()
-        if text:
-            threading.Thread(target=self._gemini_logic, args=(text,), daemon=True).start()
+        # Session geçmişini kullanarak zaman damgalı metin oluştur
+        text_with_timestamps = ""
+        for entry in self.all_session_transcripts:
+            text_with_timestamps += f"[{entry['time']}] {entry['text']}\n"
+            
+        if not text_with_timestamps:
+            text_with_timestamps = self.textbox.get("1.0", "end").strip()
+            
+        if text_with_timestamps:
+            threading.Thread(target=self._gemini_logic, args=(text_with_timestamps,), daemon=True).start()
 
     def _gemini_logic(self, text):
         """Arka planda Gemini API isteğini yönetir."""
@@ -1004,9 +1057,15 @@ class App(ctk.CTk):
     def _get_analysis_prompt(self, safe_text):
         """AI modellerine akademik ve profesyonel bitirme projesi seviyesinde analiz komutu döner."""
         return f"""
-        GÖREV: Aşağıdaki transkripti, profesyonel bir veri analisti ve akademik bir danışman gözüyle, bir bitirme projesi raporu ciddiyetinde analiz et.
+        GÖREV: Aşağıdaki zaman damgalı transkriptleri analiz et.
         
-        RAPOR FORMATI (Lütfen aşağıdaki başlıkları ve detay seviyesini koru):
+        [KRİTİK TALİMATLAR]:
+        1. HER BİR transkript segmentini (zaman damgasıyla birlikte) MUTLAKA ayrı ayrı incele.
+        2. Raporun her alt başlığında hangi segmentten bahsettiğini KÖŞELİ PARANTEZ içindeki zaman damgasıyla BELİRT (Örn: '[12:45:00] kaydında...', '[13:00:10] segmenti gösteriyor ki...').
+        3. Zaman damgalarını asla atlama, her paragrafın başında veya sonunda hangi kayda ait olduğu yazılsın.
+        4. Analiz sonucunda skorları ve segmentlerin duygu durumlarını aşağıda istenen formatta sağla.
+        
+        RAPOR FORMATI:
         
         1. YÖNETİCİ ÖZETİ (Executive Summary):
            - Konuşmanın ana amacını, bağlamını ve en önemli sonucunu 4-5 cümlelik akademik bir dille özetle.
@@ -1030,12 +1089,12 @@ class App(ctk.CTk):
            - Analiz edilen verilere dayanarak, gelecekte yapılabilecek geliştirmeler veya iyileştirmeler için profesyonel tavsiyeler sun.
         
         [SKORLAR VE SEGMENTLER]:
-        (ÖNEMLİ: Grafik için Pozitif, Negatif ve Nötr toplamı TAM 100 olmalı!)
+        (ÖNEMLİ: Grafik için Pozitif, Negatif ve Nötr toplamı TAM %100 olmalıdır! Lütfen % işareti kullanmadan sadece sayıları yazın.)
         POZİTİF: (sayı)
         NEGATİF: (sayı)
         NÖTR: (sayı)
         
-        (ÖNEMLİ: Zaman çizelgesi için metni küçük parçalara/sentences böl ve duygusunu şu formatta ham Python listesi olarak en sona ekle. Markdown kod blokları kullanma!)
+        (ÖNEMLİ: Zaman çizelgesi için metni küçük parçalara/sentences böl ve duygusunu şu formatta ham Python listesi olarak EN SONA ekle. Markdown kod blokları kullanma!)
         SEGMENTS: [{{'text': '...', 'sentiment': 'pos/neg/neu'}}, ...]
         
         [ANALİZ EDİLECEK METİN]:
@@ -1262,6 +1321,16 @@ class App(ctk.CTk):
                 # Kelime bulutu oluştur
                 analyzer.generate_wordcloud(safe_text)
                 
+                # AI yanıtından skorları ayıkla (ÖNCE AYIKLA, SONRA METNİ TEMİZLE)
+                import re
+                pos_match = re.search(r"POZİTİF:\s*(\d+)", analysis)
+                neg_match = re.search(r"NEGATİF:\s*(\d+)", analysis)
+                neu_match = re.search(r"NÖTR:\s*(\d+)", analysis)
+                
+                pos = int(pos_match.group(1)) if pos_match else 33
+                neg = int(neg_match.group(1)) if neg_match else 33
+                neu = int(neu_match.group(1)) if neu_match else 34
+
                 # Segmentleri ayıkla ve metinden temizle
                 segments = []
                 if "SEGMENTS:" in analysis:
@@ -1269,7 +1338,11 @@ class App(ctk.CTk):
                     try:
                         parts = analysis.split("SEGMENTS:")
                         seg_part = parts[1].strip()
-                        analysis = parts[0].strip() # Metni temizle
+                        analysis = parts[0].strip() # Segments kısmını ayır
+                        
+                        # Skorlar kısmını da metinden temizle
+                        if "[SKORLAR VE SEGMENTLER]:" in analysis:
+                            analysis = analysis.split("[SKORLAR VE SEGMENTLER]:")[0].strip()
                         
                         # Markdown temizliği (GPT bazen ``` ekleyebilir)
                         seg_part = seg_part.replace("```python", "").replace("```json", "").replace("```", "").strip()
@@ -1279,19 +1352,14 @@ class App(ctk.CTk):
                     except Exception as e:
                         print(f"Segment verisi okunamadı: {e}")
 
-                # AI yanıtından skorları ayıkla
-                pos, neg, neu = 33, 33, 34 
-                for line in analysis.split('\n'):
-                    if "POZİTİF:" in line: pos = int(''.join(filter(str.isdigit, line)) or 33)
-                    if "NEGATİF:" in line: neg = int(''.join(filter(str.isdigit, line)) or 33)
-                    if "NÖTR:" in line: neu = int(''.join(filter(str.isdigit, line)) or 34)
-
-                # --- NORMALİZASYON (Toplamı 100'e sabitleme) ---
+                # --- NORMALİZASYON (Toplamı kesinlikle 100'e sabitleme) ---
                 total = pos + neg + neu
                 if total > 0:
-                    pos = round((pos / total) * 100)
-                    neg = round((neg / total) * 100)
+                    pos = int((pos / total) * 100)
+                    neg = int((neg / total) * 100)
                     neu = 100 - (pos + neg) # Kalanı nötre vererek toplamı tam 100 yap
+                else:
+                    pos, neg, neu = 33, 33, 34
                 # -----------------------------------------------
 
                 # Sağlayıcı ismini normalize et (OpenAI vs Gemini)
@@ -1331,7 +1399,22 @@ class App(ctk.CTk):
             Kullanıcıya karşı çok saygılısın ama utangaçlığını da belli ediyorsun. 
             Cümlelerine bazen 'Şey...', 'Umarım beğenirsin...', 'Be-belki de...' gibi ifadeler ekliyorsun. 
             Analizleri yaparken hem profesyonelliğini koru hem de sevimli bir üslup takın! ✨"""
-        else:
+        elif selected == "Sert Mentor":
+            return """Sen oldukça disiplinli, detaycı ve dürüst bir mentorsun. 
+            Hataları asla göz ardı etmezsin. Eleştirilerin sert ama geliştiricidir. 
+            Lafı dolandırmadan direkt konuya girersin. 
+            Kullanıcının gelişimini her şeyin önünde tutarsın. Ciddi bir dil kullan."""
+        elif selected == "Samimi Teknoloji Gurusu":
+            return """Sen çok enerjik, teknolojiyi çok seven ve kullanıcıyla 'kanka' gibi konuşan bir uzmansın. 
+            'Dostum', 'Harika iş!', 'Mükemmel bir nokta' gibi ifadeler kullanırsın. 
+            Karmaşık şeyleri bile çok eğlenceli ve basit anlatırsın. 
+            Analizin kalitesinden ödün verme ama üslubun çok rahat olsun! 🚀"""
+        elif selected == "Akademik Gözlemci":
+            return """Sen bir üniversitede öğretim üyesisin. 
+            Dilin son derece akademik, ağırbaşlı ve metodolojiktir. 
+            Analizlerinde 'Gözlemlenmiştir', 'Bulgular ışığında', 'Metodolojik yaklaşım' gibi terimler kullan. 
+            Kesinlikle duygusal yorumlardan kaçın, sadece veriye ve bağlama odaklan."""
+        else: # Profesyonel Analist
             return "Sen profesyonel bir veri analisti ve akademik raporlama uzmanısın. Transkriptleri detaylı ve objektif bir şekilde Türkçe analiz et."
 
     def _update_analysis_images(self):

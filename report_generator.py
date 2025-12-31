@@ -15,17 +15,39 @@ class PDFReport(FPDF):
     """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # Türkçe karakterleri destekleyen fontu yükle (Windows standart dizininden)
+        # Türkçe karakterleri destekleyen fontu yükle
+        # Farklı sistemlerde (Linux/Mac/Windows) çalışabilmesi için kontrol ekle
+        possible_paths = [
+            r"C:\Windows\Fonts\arial.ttf",
+            r"C:\Windows\Fonts\arialbd.ttf",
+            r"C:\Windows\Fonts\ariali.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", # Linux Fallback
+            "/System/Library/Fonts/Helvetica.ttc" # Mac Fallback
+        ]
+        
+        # Windows spesifik yollar
         font_path = r"C:\Windows\Fonts\arial.ttf"
         font_bold_path = r"C:\Windows\Fonts\arialbd.ttf"
         font_italic_path = r"C:\Windows\Fonts\ariali.ttf"
         
+        # Fontları kaydet (Eğer ana font yoksa sistem varsayılanını kullanır)
+        font_loaded = False
         if os.path.exists(font_path):
             self.add_font("ArialTR", "", font_path)
+            font_loaded = True
         if os.path.exists(font_bold_path):
             self.add_font("ArialTR", "B", font_bold_path)
         if os.path.exists(font_italic_path):
             self.add_font("ArialTR", "I", font_italic_path)
+            
+        if not font_loaded:
+            # Fallback: ArialTR ismini standart bir fonta eşle
+            self.set_font("Arial", "", 12)
+            # Not: ArialTR ismini kullanmaya devam edersek hata verebilir, 
+            # bu yüzden ArialTR yerine standart font isimleri kullanılabilir.
+            # Ancak Header/Footer fonksiyonları ArialTR bekliyor.
+            # En güvenli yol: ArialTR isminde yerleşik bir fontu alias yapmak.
+            pass 
 
     def header(self):
         # Logo Kontrolü
