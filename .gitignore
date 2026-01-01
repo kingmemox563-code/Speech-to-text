@@ -5,7 +5,9 @@ __pycache__/
 recordings/
 temp_recording.wav
 temp_chart.png
+temp_chart_*.png
 temp_wordcloud.png
+temp_tts_*.mp3
 ffmpeg-8.0/
 ffmpeg-8.0.tar.xz
 ffmpeg.exe
