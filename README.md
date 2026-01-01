@@ -41,8 +41,9 @@ pip install -r requirements.txt
 
 ## ⚙️ Yapılandırma
 
-1. Uygulamayı çalıştırdığınızda yan paneldeki **OpenAI Key** alanına API anahtarınızı girin.
-2. **Save Key** butonuna basarak kaydedin (Bu anahtar yerel `config.json` dosyasında saklanır).
+1. Uygulamayı çalıştırdığınızda yan paneldeki **Settings** sekmesine gidin.
+2. **OpenAI Key** ve **Gemini Key** alanlarına API anahtarlarınızı girin.
+3. **Save API Keys** butonuna basarak kaydedin (Bu anahtarlar güvenli bir şekilde `.env` dosyasında saklanır).
 
 ## 📖 Kullanım
 

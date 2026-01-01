@@ -4,7 +4,6 @@ sounddevice
 numpy
 scipy
 noisereduce
-openai-whisper
 torch
 psutil
 GPUtil
@@ -14,3 +13,6 @@ wordcloud
 matplotlib
 soundfile
 python-dotenv
+openai
+Pillow
+python-docx
