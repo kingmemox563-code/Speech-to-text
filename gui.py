@@ -721,7 +721,7 @@ class App(ctk.CTk):
             # Çalmadan önce temizlik yap (Eski dosyaları silmeye çalış)
             self._play_audio(temp_tts)
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
+            self.after(0, lambda e=e: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
 
     def _send_quick_chat(self, prompt):
         """Hızlı aksiyon butonları için prompt gönderir."""
@@ -815,7 +815,7 @@ class App(ctk.CTk):
                     time.sleep(0.05) # İşlemciyi yormadan kuyruğu boşalt
         except Exception as e:
             self.is_recording = False
-            self.after(0, lambda: messagebox.showerror("Donanım Hatası", f"Mikrofon hatası: {e}"))
+            self.after(0, lambda e=e: messagebox.showerror("Donanım Hatası", f"Mikrofon hatası: {e}"))
             return
         
         # --- SES İŞLEME: NORMALİZASYON VE GÜRÜLTÜ AZALTMA ---
@@ -915,7 +915,7 @@ class App(ctk.CTk):
             self.after(0, lambda: self.analysis_textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
             self.animator.stop("İşlem tamamlandı.")
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Hata", f"Transkripsiyon Hatası: {e}"))
+            self.after(0, lambda e=e: messagebox.showerror("Hata", f"Transkripsiyon Hatası: {e}"))
 
     def process_audio_file(self):
         """Bilgisayardan bir ses dosyası seçilmesini sağlar."""
@@ -971,7 +971,7 @@ class App(ctk.CTk):
             self._process_analysis_result(analysis, safe_text, "OpenAI")
         except Exception as e:
             err = str(e).encode('utf-8', 'ignore').decode('utf-8')
-            self.after(0, lambda: messagebox.showerror("API Hatası", f"Hata: {err}"))
+            self.after(0, lambda err=err: messagebox.showerror("API Hatası", f"Hata: {err}"))
 
     # --- GEMINI ANALİZ METOTLARI ---
     def run_gemini_analysis(self):
@@ -1005,7 +1005,7 @@ class App(ctk.CTk):
             self._process_analysis_result(analysis, safe_text, "Gemini")
         except Exception as e:
             err = str(e).encode('utf-8', 'ignore').decode('utf-8')
-            self.after(0, lambda: messagebox.showerror("API Hatası", f"Hata: {err}"))
+            self.after(0, lambda err=err: messagebox.showerror("API Hatası", f"Hata: {err}"))
 
     # --- AI CHAT (SORU-CEVAP) MANTIĞI ---
     def ask_ai_question(self):
@@ -1049,7 +1049,7 @@ class App(ctk.CTk):
             self.last_analysis = answer # Seslendirilebilmesi için son cevabı kaydet
             self.after(0, lambda: self._add_chat_to_ui(question, answer))
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Chat Hatası", f"Hata: {e}"))
+            self.after(0, lambda e=e: messagebox.showerror("Chat Hatası", f"Hata: {e}"))
         finally:
             self.after(0, lambda: self.ask_btn.configure(state="normal", text="SOR"))
             self.after(0, lambda: self.chat_entry.delete(0, "end"))
@@ -1163,7 +1163,7 @@ class App(ctk.CTk):
             self.after(0, lambda: self._update_language_ui(result))
             self.animator.stop("Dil analizi tamamlandı.")
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Dil Koçu Hatası", f"Hata: {e}"))
+            self.after(0, lambda e=e: messagebox.showerror("Dil Koçu Hatası", f"Hata: {e}"))
         finally:
             self.after(0, lambda: self.run_coach_btn.configure(state="normal", text="DİL ANALİZİ BAŞLAT"))
 
@@ -1225,7 +1225,7 @@ class App(ctk.CTk):
             response.stream_to_file(temp_tts)
             self._play_audio(temp_tts)
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
+            self.after(0, lambda e=e: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
 
     def ask_coach_ai_question(self):
         """Dil Koçu sekmesinde kullanıcının sorduğu soruyu yanıtlar."""
@@ -1283,7 +1283,7 @@ class App(ctk.CTk):
             self.coach_chat_history.append((question, answer))
             self.after(0, lambda: self._add_coach_chat_to_ui(question, answer))
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Koç Chat Hatası", f"Hata: {e}"))
+            self.after(0, lambda e=e: messagebox.showerror("Koç Chat Hatası", f"Hata: {e}"))
         finally:
             self.after(0, lambda: self.coach_ask_btn.configure(state="normal", text="SOR"))
             self.after(0, lambda: self.coach_chat_entry.delete(0, "end"))
