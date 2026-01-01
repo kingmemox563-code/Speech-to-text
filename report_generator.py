@@ -214,17 +214,6 @@ class ReportGenerator:
                 pdf.ln(2)
                 pdf.line(15, pdf.get_y(), 195, pdf.get_y())
 
-        # --- 4. ORİJİNAL KONUŞMA DÖKÜMÜ ---
-        if transcript:
-            pdf.add_page()
-            pdf.set_font("ArialTR", 'B', 14)
-            pdf.set_text_color(41, 128, 185)
-            pdf.cell(0, 10, "4. KONUŞMA DÖKÜMÜ (Transkript)", 0, 1, 'L')
-            
-            pdf.set_font("ArialTR", '', 9)
-            pdf.set_text_color(127, 140, 141)
-            pdf.multi_cell(0, 5, transcript)
-            
         try:
             pdf.output(filename)
             return filename
