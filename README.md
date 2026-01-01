@@ -87,9 +87,6 @@ Bu proje, **İskenderun Teknik Üniversitesi (İSTE)** bünyesinde, Mühendislik
 
 - **Hazırlayan:** Mehmet Karataş
 - **Öğrenci No:** 222523002
-- **Ders:** Mühendislikte Bilgisayar Uygulamaları I
-- **Tarih:** Ocak 2026
-
 ---
 
 ## 📜 Lisans
