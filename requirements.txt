@@ -16,3 +16,5 @@ python-dotenv
 openai
 Pillow
 python-docx
+pywinstyles
+pygame

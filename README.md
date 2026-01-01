@@ -17,27 +17,27 @@ Bu proje, yapay zeka destekli bir ses kayıt, transkripsiyon (metne dönüştür
 ## 🛠 Kurulum ve Sistem Gereksinimleri
 
 ### 1. FFmpeg Kurulumu (Kritik)
-Ses işleme için sisteminizde FFmpeg yüklü olmalıdır.
+Ses işleme için sisteminizde FFmpeg yüklü olmalıdır. İki yöntemden birini seçin:
+
+**Yöntem A: Otomatik Kurulum (Önerilen)**
+Proje içindeki yardımcı betiği çalıştırarak FFmpeg'i otomatik kurabilirsiniz:
+```bash
+python setup_ffmpeg.py
+```
+
+**Yöntem B: Manuel Kurulum**
 1. [ffmpeg.org](https://ffmpeg.org/download.html) adresinden indirin.
 2. `bin` klasörünü sistem PATH'inize ekleyin.
 
-### 2. Donanıma Göre Kurulum (PyTorch)
-
-#### A. NVIDIA Ekran Kartınız Varsa (Önerilen)
-En iyi performans için CUDA desteğiyle kurun:
-```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-```
-
-#### B. Sadece CPU Kullanıyorsanız
-```bash
-pip install torch torchvision torchaudio
-```
-
-### 3. Kütüphanelerin Yüklenmesi
+### 2. Kütüphanelerin Yüklenmesi
+Önce projeyi klonlayın ve ana dizine gidin, ardından gerekli paketleri yükleyin:
 ```bash
 pip install -r requirements.txt
 ```
+
+> [!NOTE]
+> NVIDIA ekran kartınız (GPU) varsa, transkripsiyonun çok daha hızlı olması için torch'u CUDA desteğiyle yüklemeniz önerilir:
+> `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118`
 
 ## ⚙️ Yapılandırma
 
