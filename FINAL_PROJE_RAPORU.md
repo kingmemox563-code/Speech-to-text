@@ -1,8 +1,7 @@
 # PROJE FİNAL RAPORU: AKILLI SES ANALİZ VE DOĞRULAMA SİSTEMİ
 
 **Hazırlayan:** Mehmet Karataş  
-**Öğrenci No:** 222523002  
-**Ders:** MÜHENDİSLİKTE BİLGİSAYAR UYGULAMALARI I  
+**Öğrenci No:** 222523002   
 
 ---
 
