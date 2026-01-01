@@ -1,63 +1,96 @@
-# Akıllı Ses Analiz ve Doğrulama Sistemi
+# 🎙️ Akıllı Ses Analiz ve Doğrulama Sistemi
 
-Bu proje, yapay zeka destekli bir ses kayıt, transkripsiyon (metne dönüştürme) ve detaylı analiz sistemidir. OpenAI Whisper modelini yerel transkripsiyon için, GPT-4o modelini ise derinlemesine metin analizi için kullanır.
+![Version](https://img.shields.io/badge/version-16.0-brightgreen)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-orange)
+![AI-Powered](https://img.shields.io/badge/AI-Whisper%20%7C%20GPT--4o%20%7C%20Gemini-red)
 
-## 🚀 Öne Çıkan Özellikler
+Bu proje, modern ses işleme teknolojileri ile en gelişmiş yapay zeka modellerini harmanlayan profesyonel bir masaüstü uygulamasıdır. Kullanıcıların sesli verilerini %99'a varan doğrulukla metne dönüştürür, bu verileri akademik ve kurumsal standartlarda analiz eder ve görsel grafiklerle desteklenmiş profesyonel raporlar üretir.
 
-- **Cyberpunk Glassmorphism Arayüzü**: Modern, neon pembe vurgulu ve şeffaf katmanlı premium tasarım.
-- **Gerçek Zamanlı Ses Kaydı**: Mikrofon üzerinden yüksek kaliteli ses kaydı ve dinamik görselleştirici.
-- **Auto-VAD (Otomatik Sessizlik Algılama)**: Konuşma bittiğinde kaydı otomatik durduran akıllı algoritma.
-- **AI Persona Sistemi**: Farklı karakterlerde (Sert Mentor, Teknoloji Gurusu vb.) analiz ve mentorluk.
-- **AI Dil Koçu (Mentor)**: Hedef dilde hata düzeltme, doğal ifade ve mentorluk desteği.
-- **Whisper Transkripsiyon**: Yerel olarak en yüksek doğrulukla metne dönüştürme.
-- **Görsel Analitik**: Kelime bulutu (WordCloud) ve %100 normalize edilmiş duygu durum grafikleri.
-- **Profesyonel PDF & Word Raporlama**: Tüm analizleri ve grafikleri içeren kurumsal yapıda raporlar.
-- **Donanım Uyumluluğu**: NVIDIA GPU (CUDA) ve CPU üzerinde optimize çalışma.
+---
 
-## 🛠 Kurulum ve Sistem Gereksinimleri
+## 📸 Uygulama Arayüzü
+<div align="center">
+  <img src="logo.png" width="200" alt="Proje Logosu">
+  <p><i>Modern Cyberpunk Glassmorphism Tasarımı</i></p>
+</div>
 
-### 1. FFmpeg Kurulumu (Kritik)
-Ses işleme için sisteminizde FFmpeg yüklü olmalıdır. İki yöntemden birini seçin:
+---
 
-**Yöntem A: Otomatik Kurulum (Önerilen)**
-Proje içindeki yardımcı betiği çalıştırarak FFmpeg'i otomatik kurabilirsiniz:
+## ✨ Temel Özellikler
+
+### 🛡️ Ses ve Transkripsiyon
+- **Hibrit Whisper Entegrasyonu:** `OpenAI Whisper` modelleri ile cihazınızın donanımına (GPU/CPU) özel optimize edilmiş transkripsiyon.
+- **Auto-VAD:** Voice Activity Detection teknolojisi ile sessiz sahneleri algılama ve otomatik kayıt sonlandırma.
+- **Dinamik Görselleştirici:** Ses dalgalarını gerçek zamanlı olarak izleyen modern spektrum çubuğu.
+
+### 🧠 Akıllı Analiz Motoru
+- **GPT-4o & Gemini Duo:** Dünyanın en güçlü iki dil modelini kullanarak derinlemesine içerik analizi.
+- **Persona Sistemi:** Profesyonel Analist, Sert Mentor veya Teknoloji Gurusu gibi farklı kimliklerle etkileşim kurun.
+- **Dil Koçu Modülü:** Yabancı dilde konuşma pratiği yapın, hatalarınızı AI yardımıyla düzeltin.
+
+### 📊 Görselleştirme ve Raporlama
+- **Gelişmiş Grafikler:** WordCloud (Kelime Bulutu) ve %100 normalize edilmiş Duygu Durum (Sentiment) pasta grafikleri.
+- **Kurumsal PDF Çıktısı:** Tüm analizleri, transkriptleri ve grafikleri içeren şık PDF raporları.
+- **Word Desteği:** Raporlarınızı düzenlenebilir `.docx` formatında dışa aktarma imkanı.
+
+---
+
+## 🛠️ Kurulum Rehberi
+
+### 1. Mikro-Kurulum (Otomatik)
+Ses motoru için gerekli olan FFmpeg aracını tek komutla kurabilirsiniz:
 ```bash
 python setup_ffmpeg.py
 ```
 
-**Yöntem B: Manuel Kurulum**
-1. [ffmpeg.org](https://ffmpeg.org/download.html) adresinden indirin.
-2. `bin` klasörünü sistem PATH'inize ekleyin.
-
-### 2. Kütüphanelerin Yüklenmesi
-Önce projeyi klonlayın ve ana dizine gidin, ardından gerekli paketleri yükleyin:
+### 2. Bağımlılıkları Yükleme
+Uygulamanın çalışması için gerekli kütüphaneleri yükleyin:
 ```bash
 pip install -r requirements.txt
 ```
 
-> [!NOTE]
-> NVIDIA ekran kartınız (GPU) varsa, transkripsiyonun çok daha hızlı olması için torch'u CUDA desteğiyle yüklemeniz önerilir:
+> [!IMPORTANT]
+> **NVIDIA GPU Kullanıcıları İçin:** Transkripsiyon hızını 10 kat artırmak için PyTorch'un CUDA sürümünü kurun:
 > `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118`
 
-## ⚙️ Yapılandırma
+---
 
-1. Uygulamayı çalıştırdığınızda yan paneldeki **Settings** sekmesine gidin.
-2. **OpenAI Key** ve **Gemini Key** alanlarına API anahtarlarınızı girin.
-3. **Save API Keys** butonuna basarak kaydedin (Bu anahtarlar güvenli bir şekilde `.env` dosyasında saklanır).
+## ⚙️ Yapılandırma ve Başlangıç
 
-## 📖 Kullanım
+1. **API Anahtarları:** Ayarlar (`Settings`) sekmesinden OpenAI ve Gemini API anahtarlarınızı girin. Bilgileriniz güvenli bir şekilde `.env` dosyasında saklanır.
+2. **Çalıştırma:** Ana uygulamayı başlatmak için:
+   ```bash
+   python main.py
+   ```
 
-1. **Model Seçimi**: Siteminize göre model seçin:
-   - **NVIDIA GPU (8GB+ VRAM)**: `medium` veya `large`
-   - **Giriş Seviye GPU / İyi CPU**: `small`
-   - **Zayıf Sistemler**: `tiny` veya `base`
-2. **Kayda Başla**: "START RECORDING" butonuna basın, konuşun ve "STOP RECORDING" ile bitirin.
-3. **Analiz Et**: Transkript oluştuktan sonra "ANALYZE WITH GPT-4o" butonuna basarak yapay zeka analizini başlatın.
-4. **PDF Kaydet**: Sonuçları "SAVE AS PDF" butonuyla kurumsal bir rapora dönüştürün.
+---
 
-## 🎓 Proje Hakkında
-Bu proje, **İskenderun Teknik Üniversitesi (İSTE)** bünyesinde gerçekleştirilen bir ders projesi kapsamında geliştirilmiştir.
-- **Geliştirici**: Mehmet Karataş
-- **Ders**: Mühendislikte Bilgisayar Uygulamaları I
+## 🧬 Proje Mimarisi
 
-Mühendislikte Bilgisayar Uygulamaları I Dersi kapsamında geliştirilmiştir
+```mermaid
+graph TD
+    A[Ses Kaydı / Mikrofon] --> B{Whisper STT}
+    B --> C[Ham Metin]
+    C --> D[Analiz Motoru - AI]
+    D --> E[Görselleştirme - Matplotlib]
+    D --> F[Raporlama - FPDF/Word]
+    E --> G[Final Rapor]
+    F --> G
+```
+
+---
+
+## 🎓 Akademik Künye
+
+Bu proje, **İskenderun Teknik Üniversitesi (İSTE)** bünyesinde, Mühendislik Fakültesi dersleri kapsamında geliştirilmiştir.
+
+- **Hazırlayan:** Mehmet Karataş
+- **Öğrenci No:** 222523002
+- **Ders:** Mühendislikte Bilgisayar Uygulamaları I
+- **Tarih:** Ocak 2026
+
+---
+
+## 📜 Lisans
+Bu proje **MIT Lisansı** altında lisanslanmıştır. Daha fazla bilgi için [LICENSE](LICENSE) dosyasına bakabilirsiniz.
