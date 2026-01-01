@@ -1089,10 +1089,10 @@ class App(ctk.CTk):
            - Analiz edilen verilere dayanarak, gelecekte yapılabilecek geliştirmeler veya iyileştirmeler için profesyonel tavsiyeler sun.
         
         [SKORLAR VE SEGMENTLER]:
-        (ÖNEMLİ: Grafik için Pozitif, Negatif ve Nötr toplamı TAM %100 olmalıdır! Lütfen % işareti kullanmadan sadece sayıları yazın.)
-        POZİTİF: (sayı)
-        NEGATİF: (sayı)
-        NÖTR: (sayı)
+        (ÖNEMLİ: Grafik için Pozitif, Negatif ve Nötr toplamı TAM %100 olmalıdır! Lütfen adet (count) bazlı değil, metnin geneline yayılan duygu YÜZDESİ bazlı hesaplama yapın. Sadece sayıları yazın.)
+        POZİTİF: (yüzde)
+        NEGATİF: (yüzde)
+        NÖTR: (yüzde)
         
         (ÖNEMLİ: Zaman çizelgesi için metni küçük parçalara/sentences böl ve duygusunu şu formatta ham Python listesi olarak EN SONA ekle. Markdown kod blokları kullanma!)
         SEGMENTS: [{{'text': '...', 'sentiment': 'pos/neg/neu'}}, ...]
@@ -1321,16 +1321,12 @@ class App(ctk.CTk):
                 # Kelime bulutu oluştur
                 analyzer.generate_wordcloud(safe_text)
                 
-                # AI yanıtından skorları ayıkla (ÖNCE AYIKLA, SONRA METNİ TEMİZLE)
+                # AI yanıtından skorları ayıkla
                 import re
                 pos_match = re.search(r"POZİTİF:\s*(\d+)", analysis)
                 neg_match = re.search(r"NEGATİF:\s*(\d+)", analysis)
                 neu_match = re.search(r"NÖTR:\s*(\d+)", analysis)
                 
-                pos = int(pos_match.group(1)) if pos_match else 33
-                neg = int(neg_match.group(1)) if neg_match else 33
-                neu = int(neu_match.group(1)) if neu_match else 34
-
                 # Segmentleri ayıkla ve metinden temizle
                 segments = []
                 if "SEGMENTS:" in analysis:
@@ -1338,9 +1334,10 @@ class App(ctk.CTk):
                     try:
                         parts = analysis.split("SEGMENTS:")
                         seg_part = parts[1].strip()
-                        analysis = parts[0].strip() # Segments kısmını ayır
+                        # ÖNCELİKLE analiz metnini ham verilerden temizle
+                        analysis = parts[0].strip() 
                         
-                        # Skorlar kısmını da metinden temizle
+                        # Skorlar kısmını da metinden temizle (raporlarda gözükmemesi için)
                         if "[SKORLAR VE SEGMENTLER]:" in analysis:
                             analysis = analysis.split("[SKORLAR VE SEGMENTLER]:")[0].strip()
                         
@@ -1352,14 +1349,19 @@ class App(ctk.CTk):
                     except Exception as e:
                         print(f"Segment verisi okunamadı: {e}")
 
+                # İlk okuma
+                pos_raw = int(pos_match.group(1)) if pos_match else 0
+                neg_raw = int(neg_match.group(1)) if neg_match else 0
+                neu_raw = int(neu_match.group(1)) if neu_match else 0
+
                 # --- NORMALİZASYON (Toplamı kesinlikle 100'e sabitleme) ---
-                total = pos + neg + neu
+                total = pos_raw + neg_raw + neu_raw
                 if total > 0:
-                    pos = int((pos / total) * 100)
-                    neg = int((neg / total) * 100)
+                    pos = int((pos_raw / total) * 100)
+                    neg = int((neg_raw / total) * 100)
                     neu = 100 - (pos + neg) # Kalanı nötre vererek toplamı tam 100 yap
                 else:
-                    pos, neg, neu = 33, 33, 34
+                    pos, neg, neu = 0, 0, 100 # Veri yoksa %100 nötr
                 # -----------------------------------------------
 
                 # Sağlayıcı ismini normalize et (OpenAI vs Gemini)

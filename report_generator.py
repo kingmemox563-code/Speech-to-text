@@ -123,10 +123,8 @@ class ReportGenerator:
                                 pdf.image(chart_path, x=55, w=100) # Boyut artırıldı (70->100) ve ortalandı
                                 pdf.ln(5)
                             
-                            pdf.set_font("ArialTR", 'I', 10)
-                            pdf.set_text_color(44, 62, 80)
-                            stats_text = (f"{provider} Skorları: Pozitiflik: %{stats.get('pos', 0)} | "
-                                          f"Negatiflik: %{stats.get('neg', 0)} | "
+                            stats_text = (f"{provider} Duygu Dağılımı: Pozitif: %{stats.get('pos', 0)} | "
+                                          f"Negatif: %{stats.get('neg', 0)} | "
                                           f"Nötr: %{stats.get('neu', 0)}")
                             pdf.cell(0, 10, stats_text, 0, 1, 'C')
                             pdf.ln(5)
