@@ -35,6 +35,14 @@ load_dotenv()
 # Karakter hatalarını önlemek için sistem dilini UTF-8 yapıyoruz
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
+# FFmpeg'in bulunabilmesi için mevcut dizini sistem PATH'ine ekliyoruz (Whisper için kritik)
+try:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    if current_dir not in os.environ["PATH"]:
+        os.environ["PATH"] = current_dir + os.pathsep + os.environ["PATH"]
+except Exception as e:
+    print(f"PATH güncellenirken hata oluştu: {e}")
+
 # Dinamik modül yüklemeleri (Opsiyonel bileşenler)
 try:
     from analytics import AnalyticsGenerator
