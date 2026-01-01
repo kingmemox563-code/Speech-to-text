@@ -63,7 +63,10 @@ class AudioVisualizer(ctk.CTkFrame):
             self.line_id = self.canvas.create_line(points, fill="#00adb5", width=3, smooth=True)
 
     def update_visuals(self, audio_data):
-        """Ses verisine göre barları veya waveform'u günceller."""
+        """
+        Mikrofondan gelen her ses paketinde burası tetikleniyor. 
+        Sesi analiz edip ekrandaki barları hareket ettiriyoruz ki kullanıcı sesinin alındığını anlasın.
+        """
         if self.current_heights is None: return
 
         samples = len(audio_data)

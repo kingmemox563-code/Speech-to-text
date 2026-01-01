@@ -146,7 +146,8 @@ class MicroAnimation:
 
 class App(ctk.CTk):
     """
-    Uygulamanın ana penceresini ve tüm mantıksal akışını yöneten sınıf.
+    Uygulamanın kalbi olan ana sınıfımız. Tüm pencere düzenini, ses kayıt süreçlerini,
+    yapay zeka analizlerini ve raporlama sistemini bu sınıf üzerinden yönetiyoruz.
     """
     def __init__(self):
         super().__init__()
@@ -237,7 +238,10 @@ class App(ctk.CTk):
             return ["Mikrofon Bulunamadı"]
 
     def setup_ui(self):
-        """Tüm görsel bileşenleri (butonlar, sekmeler, paneller) modernize edilmiş şekilde oluşturur."""
+        """
+        Görsel arayüzü (Arayüz Panelleri, Butonlar, Tablolar vb.) burada inşa ediyoruz.
+        Tasarım olarak modern 'Cyberpunk Glassmorphism' stilini hedefledik.
+        """
         # Kayıtlar klasörü yoksa oluştur
         if not os.path.exists("recordings"):
             os.makedirs("recordings")
@@ -744,7 +748,10 @@ class App(ctk.CTk):
         status = "açıldı" if self.auto_vad_enabled else "kapatıldı"
         print(f"Auto-VAD {status}.")
     def toggle_recording(self):
-        """Kayıt düğmesine basıldığında başlatma/durdurma işlemini yapar."""
+        """
+        Kayıt butonuna her basışımızda bu fonksiyon tetiklenir.
+        Eğer kayıt yapmıyorsak başlatır, zaten yapıyorsak durdururuz.
+        """
         if not self.is_recording:
             self.is_recording = True
             self.record_btn.configure(text="KAYDI DURDUR", fg_color="red")
@@ -1103,7 +1110,10 @@ class App(ctk.CTk):
 
     # --- AI DİL KOÇU MANTIĞI ---
     def run_language_analysis(self):
-        """Metin kutusundaki verileri AI Dil Koçu ile analiz eder."""
+        """
+        Dil Koçu sekmesinde girdiğimiz metni veya transkripti parçalayarak
+        öğrenciye özel akademik geri bildirim oluşturmak için bu fonksiyonu çağırıyoruz.
+        """
         text = self.textbox.get("1.0", "end").strip()
         if not text:
             # Eğer dashboard boşsa kendi kutusuna bak

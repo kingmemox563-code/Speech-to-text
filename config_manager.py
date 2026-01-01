@@ -13,7 +13,8 @@ load_dotenv()
 
 CONFIG_FILE = "config.json"
 
-# Uygulama ilk kez çalıştığında veya ayar bulunamadığında kullanılacak varsayılan değerler
+# Uygulama ilk açıldığında her şeyin tıkır tıkır çalışması için gereken temel ayarlarımız.
+# Eğer config.json yoksa projemiz bu değerleri baz alarak ayağa kalkıyor.
 DEFAULT_CONFIG = {
     "mic_index": None,
     "model_size": "large",
@@ -73,6 +74,7 @@ class ConfigManager:
         """
         # API anahtarları güvenlik nedeniyle config.json yerine .env dosyasında saklanır
         if key == "openai_api_key":
+            # Güvenlik çok önemli, o yüzden anahtarları direkt kodun içine yazmıyoruz.
             return os.getenv("OPENAI_API_KEY")
         if key == "gemini_api_key":
             return os.getenv("GEMINI_API_KEY")
