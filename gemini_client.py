@@ -17,7 +17,7 @@ class GeminiClient:
         """
         self.api_key = api_key
         genai.configure(api_key=self.api_key)
-        # Varsayılan model (Hesabınızda en stabil görünen)
+        # Varsayılan model (Kullanıcı tercihi)
         self.model_name = 'gemini-2.5-flash' 
         self.model = genai.GenerativeModel(self.model_name)
 
@@ -43,10 +43,10 @@ class GeminiClient:
                 
                 # Sizin API hesabınızda ListModels ile doğrulanmış modeller:
                 fallbacks = [
-                    'gemini-flash-latest', 
-                    'gemini-pro-latest',
-                    'gemini-2.5-flash',
-                    'gemini-2.0-flash'
+                    'gemini-2.0-flash-exp',
+                    'gemini-1.5-flash-latest', 
+                    'gemini-1.5-pro-latest',
+                    'gemini-flash-latest'
                 ]
                 
                 for fallback in fallbacks:
