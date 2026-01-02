@@ -35,14 +35,6 @@ load_dotenv()
 # Karakter hatalarını önlemek için sistem dilini UTF-8 yapıyoruz
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
-# FFmpeg'in bulunabilmesi için mevcut dizini sistem PATH'ine ekliyoruz (Whisper için kritik)
-try:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    if current_dir not in os.environ["PATH"]:
-        os.environ["PATH"] = current_dir + os.pathsep + os.environ["PATH"]
-except Exception as e:
-    print(f"PATH güncellenirken hata oluştu: {e}")
-
 # Dinamik modül yüklemeleri (Opsiyonel bileşenler)
 try:
     from analytics import AnalyticsGenerator
@@ -226,6 +218,25 @@ class App(ctk.CTk):
         self.auto_vad_enabled = True # Varsayılan olarak açık
         self.last_rms = 0
         
+        # --- Başlangıç Temizliği ---
+        self.cleanup_temp_files()
+
+    def cleanup_temp_files(self):
+        """Uygulama başladığında eski geçici dosyaları temizler."""
+        print("[*] Geçici dosyalar temizleniyor...")
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            for item in os.listdir(current_dir):
+                if item.startswith("temp_") and (item.endswith(".wav") or item.endswith(".mp3") or item.endswith(".png")):
+                    file_path = os.path.join(current_dir, item)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                    except Exception as e:
+                        print(f"Dosya silinemedi {item}: {e}")
+        except Exception as e:
+            print(f"Temizlik sırasında hata: {e}")
+
     def get_default_mic(self):
         """Sistemdeki varsayılan mikrofonun indeksini bulur."""
         try:
@@ -969,7 +980,7 @@ class App(ctk.CTk):
             system_msg = self._get_system_prompt()
 
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": prompt}
@@ -1103,14 +1114,25 @@ class App(ctk.CTk):
         6. AKADEMİK SONUÇ VE ÖNERİLER:
            - Analiz edilen verilere dayanarak, gelecekte yapılabilecek geliştirmeler veya iyileştirmeler için profesyonel tavsiyeler sun.
         
-        [SKORLAR VE SEGMENTLER]:
-        (ÖNEMLİ: Grafik için Pozitif, Negatif ve Nötr toplamı TAM %100 olmalıdır! Lütfen adet (count) bazlı değil, metnin geneline yayılan duygu YÜZDESİ bazlı hesaplama yapın. Sadece sayıları yazın.)
-        POZİTİF: (yüzde)
-        NEGATİF: (yüzde)
-        NÖTR: (yüzde)
+        [[DATA_START]]
+        (ÖNEMLİ: Bu satırdan sonrasını SADECE veri formatında hazırla. Kullanıcı bu kısmı görmeyecek.)
         
-        (ÖNEMLİ: Zaman çizelgesi için metni küçük parçalara/sentences böl ve duygusunu şu formatta ham Python listesi olarak EN SONA ekle. Markdown kod blokları kullanma!)
-        SEGMENTS: [{{'text': '...', 'sentiment': 'pos/neg/neu'}}, ...]
+        POZİTİF: [sayı]
+        NEGATİF: [sayı]
+        NÖTR: [sayı]
+        
+        SEGMENTS:
+        [
+          {{"text": "...", "sentiment": "pos/neg/neu"}},
+          ...
+        ]
+        
+        (ÖNEMLİ: Zaman çizelgesi için metni küçük parçalara/cümlelere böl ve duygusunu KESİN JSON formatında sağla. JSON bloğunda anahtar ve değerler için çift tırnak (") kullan.)
+        SEGMENTS:
+        [
+          {{"text": "...", "sentiment": "pos/neg/neu"}},
+          ...
+        ]
         
         [ANALİZ EDİLECEK METİN]:
         {safe_text}
@@ -1339,33 +1361,39 @@ class App(ctk.CTk):
                 # Kelime bulutu oluştur
                 analyzer.generate_wordcloud(safe_text)
                 
-                # AI yanıtından skorları ayıkla
+                # Veri bloğunu ayır (Kullanıcıya ham verileri gösterme)
+                data_block = ""
+                if "[[DATA_START]]" in analysis:
+                    parts = analysis.split("[[DATA_START]]")
+                    analysis = parts[0].strip()
+                    data_block = parts[1].strip()
+                else:
+                    # Fallback: Eğer marker yoksa ama skorlar varsa temizle
+                    if "POZİTİF:" in analysis:
+                        parts = analysis.split("POZİTİF:")
+                        analysis = parts[0].strip()
+                        data_block = "POZİTİF:" + parts[1]
+
+                # --- VERİ ANALİZİ (Görsel Dağılım ve Zaman Çizelgesi) ---
                 import re
-                pos_match = re.search(r"POZİTİF:\s*(\d+)", analysis)
-                neg_match = re.search(r"NEGATİF:\s*(\d+)", analysis)
-                neu_match = re.search(r"NÖTR:\s*(\d+)", analysis)
+                import json
                 
-                # Segmentleri ayıkla ve metinden temizle
+                # Skorları Ayıkla
+                pos_match = re.search(r"POZİTİF:?\s*(?:%)?\s*(\d+)", data_block, re.IGNORECASE)
+                neg_match = re.search(r"NEGATİF:?\s*(?:%)?\s*(\d+)", data_block, re.IGNORECASE)
+                neu_match = re.search(r"NÖTR:?\s*(?:%)?\s*(\d+)", data_block, re.IGNORECASE)
+                
+                # Segmentleri Ayıkla
                 segments = []
-                if "SEGMENTS:" in analysis:
-                    import ast
-                    try:
-                        parts = analysis.split("SEGMENTS:")
-                        seg_part = parts[1].strip()
-                        # ÖNCELİKLE analiz metnini ham verilerden temizle
-                        analysis = parts[0].strip() 
-                        
-                        # Skorlar kısmını da metinden temizle (raporlarda gözükmemesi için)
-                        if "[SKORLAR VE SEGMENTLER]:" in analysis:
-                            analysis = analysis.split("[SKORLAR VE SEGMENTLER]:")[0].strip()
-                        
-                        # Markdown temizliği (GPT bazen ``` ekleyebilir)
-                        seg_part = seg_part.replace("```python", "").replace("```json", "").replace("```", "").strip()
-                        
-                        segments = ast.literal_eval(seg_part)
+                try:
+                    seg_match = re.search(r"SEGMENTS:?\s*(?:```(?:json|python)?)?\s*(\[.*?\])", data_block, re.DOTALL)
+                    if seg_match:
+                        seg_json = seg_match.group(1).strip()
+                        seg_json = seg_json.replace("```json", "").replace("```", "").strip()
+                        segments = json.loads(seg_json)
                         self.after(0, lambda: self.sentiment_timeline.update_timeline(segments))
-                    except Exception as e:
-                        print(f"Segment verisi okunamadı: {e}")
+                except Exception as e:
+                    print(f"Segment parsing failure: {e}")
 
                 # İlk okuma
                 pos_raw = int(pos_match.group(1)) if pos_match else 0
