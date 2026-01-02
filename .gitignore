@@ -7,3 +7,9 @@ temp_*
 ffmpeg-8.0/
 ffmpeg-8.0.tar.xz
 ffmpeg.exe
+
+# Mezuniyet Raporu Dosyaları
+generate_final_report.py
+*_BITIRME_PROJESI_RAPORU.docx
+iste_logo.png
+FINAL_PROJE_RAPORU.md
