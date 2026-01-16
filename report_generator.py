@@ -220,3 +220,47 @@ class ReportGenerator:
         except Exception as e:
             print(f"PDF Koç Raporu Kayıt Hatası: {e}")
             return None
+
+    def create_education_report(self, filename, chat_history, metadata):
+        """
+        Eğitim Asistanı sohbetini, quiz sonucunu ve özetleri PDF raporuna dönüştürür.
+        """
+        pdf = PDFReport()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        
+        # --- BAŞLIK ---
+        pdf.set_font("ArialTR", 'B', 16)
+        pdf.set_text_color(41, 128, 185) # Mavi ton
+        pdf.cell(0, 15, f"EĞİTİM ASİSTANI RAPORU", 0, 1, 'C')
+        
+        pdf.set_font("ArialTR", 'B', 12)
+        pdf.set_text_color(44, 62, 80)
+        pdf.cell(0, 10, f"KONU: {metadata.get('topic', 'Genel').upper()}", 0, 1, 'C')
+        pdf.ln(5)
+
+        # --- SEANS BİLGİLERİ ---
+        pdf.set_fill_color(230, 240, 255)
+        pdf.set_font("ArialTR", 'B', 12)
+        pdf.cell(0, 10, " SEANS ÖZETİ", 0, 1, 'L', True)
+        
+        pdf.set_font("ArialTR", '', 11)
+        pdf.cell(0, 8, f" Tarih: {metadata.get('date', time.strftime('%d.%m.%Y %H:%M'))}", 0, 1, 'L')
+        pdf.cell(0, 8, f" Quiz Başarısı: {metadata.get('score', 'Uygulanmadı')}", 0, 1, 'L')
+        pdf.ln(5)
+
+        # --- SOHBET VE EĞİTİM İÇERİĞİ ---
+        pdf.set_font("ArialTR", 'B', 12)
+        pdf.set_fill_color(230, 240, 255)
+        pdf.cell(0, 10, " EĞİTİM SOHBETİ VE NOTLAR", 0, 1, 'L', True)
+        
+        pdf.set_font("ArialTR", '', 10)
+        pdf.set_text_color(0, 0, 0)
+        pdf.multi_cell(0, 7, chat_history)
+        
+        try:
+            pdf.output(filename)
+            return filename
+        except Exception as e:
+            print(f"PDF Eğitim Raporu Kayıt Hatası: {e}")
+            return None

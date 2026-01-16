@@ -5,6 +5,7 @@ API entegrasyonlarını ve raporlama özelliklerini bir araya getirir.
 """
 
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 import threading
 import queue
@@ -25,7 +26,6 @@ import datetime
 import whisper
 import noisereduce as nr
 import pygame
-import os
 import shutil
 import pywinstyles # Modern Windows pencere efektleri için
 
@@ -162,6 +162,8 @@ class App(ctk.CTk):
         self.selected_mic_index = self.get_default_mic()
         self.audio_queue = queue.Queue() # Ses verileri için iş parçacığı güvenli kuyruk
         self.all_session_transcripts = [] # Oturum boyuncaki tüm transkriptleri saklayan liste
+        self.recording_buttons = [] # Bu artık otomatik eşleme için kullanılmayacak, ama referans için kalsın
+        self.active_recording_source = "home" # "home" veya "language"
         
         # Pygame Mixer Başlat (TTS ve Çalma için)
         try:
@@ -179,6 +181,27 @@ class App(ctk.CTk):
         self.whisper_model = None
         self.current_model_type = None
         
+        # Dil Öğrenme (Language Coach) Durumu
+        self.target_language = "İngilizce"
+        self.user_level = "A2 (Gelişmekte Olan)"
+        self.coach_mode = "Serbest Konuşma"
+        self.language_analysis_result = ""
+        self.coach_chat_history = [] # Soru-Cevap geçmişini saklamak için
+        self.topic_chat_history = [] # Konu bazlı chat geçmişi
+        
+        # Eğitim Asistanı Quiz ve Gelişmiş Özellikler
+        self.is_quiz_active = False
+        self.current_quiz_questions = []
+        self.current_quiz_index = 0
+        self.quiz_score = 0
+        self.topic_flashcards = []
+        self.auto_tts_topic_var = tk.BooleanVar(value=False)
+        self.last_topic_response = ""
+        
+        # Analiz Sonuçlarını Saklama (Çoklu PDF raporu için)
+        self.analysis_results = {"OpenAI": "", "Gemini": ""}
+        self.all_sentiment_stats = {"OpenAI": None, "Gemini": None}
+
         # Ana Pencere Konfigürasyonu
         self.title("Ses Analiz Sistemi")
         self.geometry("1300x950")
@@ -201,16 +224,6 @@ class App(ctk.CTk):
         except Exception as pe:
             print(f"Pencere stili hatası: {pe}")
         
-        # Analiz Sonuçlarını Saklama (Çoklu PDF raporu için)
-        self.analysis_results = {"OpenAI": "", "Gemini": ""}
-        self.all_sentiment_stats = {"OpenAI": None, "Gemini": None}
-        
-        # Dil Öğrenme (Language Coach) Durumu
-        self.target_language = "İngilizce"
-        self.user_level = "A2 (Gelişmekte Olan)"
-        self.coach_mode = "Serbest Konuşma"
-        self.language_analysis_result = ""
-        self.coach_chat_history = [] # Soru-Cevap geçmişini saklamak için
         
         # Auto-VAD (Silence Detection) Ayarları
         self.silence_threshold = 0.01 # Sessizlik eşiği (RMS)
@@ -347,7 +360,7 @@ class App(ctk.CTk):
         self.dashboard_controls.grid_columnconfigure((0, 1), weight=1)
 
         self.record_btn = ctk.CTkButton(self.dashboard_controls, text="KAYDI BAŞLAT", fg_color="green", font=("Arial", 14, "bold"),
-                                       height=50, command=self.toggle_recording)
+                                       height=50, command=lambda: self.toggle_recording(source="home"))
         self.record_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
 
         self.file_btn = ctk.CTkButton(self.dashboard_controls, text="SES DOSYASI YÜKLE", fg_color="#34495e", font=("Arial", 14, "bold"),
@@ -454,65 +467,130 @@ class App(ctk.CTk):
         # 4. DİL KOÇU (AI LANGUAGE COACH) PANELİ
         self.language_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.language_frame.grid_columnconfigure(0, weight=1)
-        self.language_frame.grid_rowconfigure(2, weight=1)
+        self.language_frame.grid_columnconfigure(1, weight=1) # Sağ panel için
+        self.language_frame.grid_rowconfigure(1, weight=1)
 
-        ctk.CTkLabel(self.language_frame, text="AI DİL KOÇU & MENTOR", font=("Inter", 22, "bold"), text_color="#ff007f").grid(row=0, column=0, pady=(20, 10))
+        ctk.CTkLabel(self.language_frame, text="AI DİL KOÇU & EĞİTİM MERKEZİ", font=("Inter", 22, "bold"), text_color="#ff007f").grid(row=0, column=0, columnspan=2, pady=(20, 10))
 
-        # Dil Ayarları Üst Bar
-        self.lang_coach_settings = ctk.CTkFrame(self.language_frame)
-        self.lang_coach_settings.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
+        # --- SOL PANEL: DİL KOÇLUĞU ---
+        self.coach_left_panel = ctk.CTkFrame(self.language_frame, fg_color="transparent")
+        self.coach_left_panel.grid(row=1, column=0, padx=(20, 10), pady=10, sticky="nsew")
+        self.coach_left_panel.grid_columnconfigure(0, weight=1)
+        self.coach_left_panel.grid_rowconfigure(2, weight=1)
+
+        # Dil Ayarları Üst Bar (Sol Panel İçinde)
+        self.lang_coach_settings = ctk.CTkFrame(self.coach_left_panel)
+        self.lang_coach_settings.grid(row=0, column=0, pady=10, sticky="ew")
         
-        ctk.CTkLabel(self.lang_coach_settings, text="Hedef Dil:").pack(side="left", padx=10, pady=10)
-        self.coach_lang_combo = ctk.CTkComboBox(self.lang_coach_settings, values=["İngilizce", "Almanca", "Fransızca", "İspanyolca", "İtalyanca", "Rusça"])
+        ctk.CTkLabel(self.lang_coach_settings, text="Dil:").pack(side="left", padx=5, pady=5)
+        self.coach_lang_combo = ctk.CTkComboBox(self.lang_coach_settings, values=["İngilizce", "Almanca", "Fransızca", "İspanyolca", "İtalyanca", "Rusça"], width=100)
         self.coach_lang_combo.set("İngilizce")
-        self.coach_lang_combo.pack(side="left", padx=5)
+        self.coach_lang_combo.pack(side="left", padx=2)
 
-        ctk.CTkLabel(self.lang_coach_settings, text="Seviye:").pack(side="left", padx=10)
-        self.coach_level_combo = ctk.CTkComboBox(self.lang_coach_settings, values=["A1 (Başlangıç)", "A2 (Temel)", "B1 (Orta)", "B2 (Üst Orta)", "C1 (İleri)"])
-        self.coach_level_combo.set("A2 (Temel)")
-        self.coach_level_combo.pack(side="left", padx=5)
+        ctk.CTkLabel(self.lang_coach_settings, text="Seviye:").pack(side="left", padx=5)
+        self.coach_level_combo = ctk.CTkComboBox(self.lang_coach_settings, values=["A1", "A2", "B1", "B2", "C1"], width=70)
+        self.coach_level_combo.set("A2")
+        self.coach_level_combo.pack(side="left", padx=2)
 
-        ctk.CTkLabel(self.lang_coach_settings, text="Mod:").pack(side="left", padx=10)
-        self.coach_mode_combo = ctk.CTkComboBox(self.lang_coach_settings, values=["Serbest Konuşma", "Gramatik Düzeltme", "Kelime Dağarcığı Geliştirme"])
-        self.coach_mode_combo.set("Serbest Konuşma")
-        self.coach_mode_combo.pack(side="left", padx=5)
+        ctk.CTkLabel(self.lang_coach_settings, text="Mod:").pack(side="left", padx=5)
+        self.coach_mode_combo = ctk.CTkComboBox(self.lang_coach_settings, values=["Serbest", "Gramatik", "Kelime"], width=90)
+        self.coach_mode_combo.set("Serbest")
+        self.coach_mode_combo.pack(side="left", padx=2)
 
         # Dil Koçu Geri Bildirim Alanı
-        self.language_textbox = ctk.CTkTextbox(self.language_frame, font=("Inter", 15), corner_radius=15, border_width=2, border_color="#ff007f")
-        self.language_textbox.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
+        self.language_textbox = ctk.CTkTextbox(self.coach_left_panel, font=("Inter", 14), corner_radius=15, border_width=2, border_color="#ff007f")
+        self.language_textbox.grid(row=2, column=0, pady=10, sticky="nsew")
+        self.language_textbox.insert("1.0", "--- AI DİL KOÇU HAZIR ---\n")
+
+        # Aksiyon Butonları (Sol Panel Altı)
+        self.coach_actions = ctk.CTkFrame(self.coach_left_panel, fg_color="transparent")
+        self.coach_actions.grid(row=3, column=0, pady=10, sticky="ew")
+        self.coach_actions.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self.coach_record_btn = ctk.CTkButton(self.coach_actions, text="KAYDI BAŞLAT", fg_color="green", font=("Inter", 12, "bold"),
+                                             height=40, command=lambda: self.toggle_recording(source="language"))
+        self.coach_record_btn.grid(row=0, column=0, padx=2, sticky="ew")
+
+        self.run_coach_btn = ctk.CTkButton(self.coach_actions, text="🚀 ANALİZ", fg_color="#ff007f", font=("Inter", 12, "bold"),
+                                          height=40, command=self.run_language_analysis)
+        self.run_coach_btn.grid(row=0, column=1, padx=2, sticky="ew")
+
+        self.coach_pdf_btn = ctk.CTkButton(self.coach_actions, text="📄 PDF", fg_color="#e67e22", font=("Inter", 12, "bold"),
+                                          height=40, command=self.save_coach_pdf)
+        self.coach_pdf_btn.grid(row=0, column=2, padx=2, sticky="ew")
+
+        self.speak_coach_btn = ctk.CTkButton(self.coach_actions, text="🔊 DÜZELTMELERİ SESLENDİR", fg_color="#ff5722", font=("Inter", 12, "bold"),
+                                            height=40, command=self._speak_language_response)
+        self.speak_coach_btn.grid(row=1, column=0, columnspan=3, pady=(5, 0), sticky="ew")
+
+        # --- SAĞ PANEL: KONU BAZLI AI SOHBET ---
+        self.topic_right_panel = ctk.CTkFrame(self.language_frame, fg_color="transparent")
+        self.topic_right_panel.grid(row=1, column=1, padx=(10, 20), pady=10, sticky="nsew")
+        self.topic_right_panel.grid_columnconfigure(0, weight=1)
+        self.topic_right_panel.grid_rowconfigure(2, weight=1)
+
+        # Konu Seçimi Üst Bar
+        self.topic_settings = ctk.CTkFrame(self.topic_right_panel)
+        self.topic_settings.grid(row=0, column=0, pady=10, sticky="ew")
         
-        # başlangıç mesajı
-        self.language_textbox.insert("1.0", "--- AI DİL KOÇU HAZIR ---\nLütfen bir ses kaydı yapın veya metin girin, ardından 'DİL ANALİZİ BAŞLAT' butonuna basın.\n")
+        ctk.CTkLabel(self.topic_settings, text="Konu Seçin:").pack(side="left", padx=10, pady=10)
+        self.topic_combo = ctk.CTkComboBox(self.topic_settings, values=["Matematik", "Fizik", "Kimya", "Biyoloji", "Yapay Zeka", "Kodlama", "Tarih", "Felsefe"], width=150)
+        self.topic_combo.set("Kodlama")
+        self.topic_combo.pack(side="left", padx=5)
 
-        # Aksiyon Butonları
-        self.coach_actions = ctk.CTkFrame(self.language_frame, fg_color="transparent")
-        self.coach_actions.grid(row=3, column=0, padx=20, pady=20, sticky="ew")
-        self.coach_actions.grid_columnconfigure((0, 1), weight=1)
+        self.start_topic_btn = ctk.CTkButton(self.topic_settings, text="SOHBETİ BAŞLAT", fg_color="#4285f4", font=("Inter", 12, "bold"),
+                                            command=self.run_topic_ai_chat, width=120)
+        self.start_topic_btn.pack(side="left", padx=5)
 
-        self.run_coach_btn = ctk.CTkButton(self.coach_actions, text="🚀 DİL ANALİZİ BAŞLAT", fg_color="#ff007f", font=("Inter", 14, "bold"),
-                                          height=50, command=self.run_language_analysis)
-        self.run_coach_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        self.start_quiz_btn = ctk.CTkButton(self.topic_settings, text="📝 QUIZ", fg_color="#10a37f", font=("Inter", 12, "bold"),
+                                           command=self.run_topic_quiz, width=80)
+        self.start_quiz_btn.pack(side="left", padx=5)
 
-        self.speak_coach_btn = ctk.CTkButton(self.coach_actions, text="🔊 DÜZELTMELERİ SESLENDİR", fg_color="#ff5722", font=("Arial", 14, "bold"),
-                                            height=50, command=self._speak_language_response)
-        self.speak_coach_btn.grid(row=0, column=1, padx=5, sticky="ew")
+        self.flashcard_btn = ctk.CTkButton(self.topic_settings, text="🎴 KARTLAR", fg_color="#ffea00", text_color="black", font=("Inter", 12, "bold"),
+                                          command=self.generate_flashcards, width=90)
+        self.flashcard_btn.pack(side="left", padx=5)
 
-        self.coach_pdf_btn = ctk.CTkButton(self.coach_actions, text="📄 PDF RAPOR AL", fg_color="#e67e22", font=("Arial", 14, "bold"),
-                                          height=50, command=self.save_coach_pdf)
-        self.coach_pdf_btn.grid(row=0, column=2, padx=(5, 0), sticky="ew")
+        self.topic_pdf_btn = ctk.CTkButton(self.topic_settings, text="📄 PDF", fg_color="#e67e22", font=("Inter", 12, "bold"),
+                                          command=self.save_topic_pdf, width=70)
+        self.topic_pdf_btn.pack(side="left", padx=5)
 
-        # Dil Koçu AI Chat Alanı
-        self.coach_chat_frame = ctk.CTkFrame(self.language_frame, corner_radius=15, border_width=1, border_color="#00adb5")
-        self.coach_chat_frame.grid(row=4, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.auto_tts_topic_switch = ctk.CTkSwitch(self.topic_settings, text="OTOTTS", variable=self.auto_tts_topic_var, 
+                                                 font=("Inter", 10), width=60)
+        self.auto_tts_topic_switch.pack(side="right", padx=10)
+
+        # Konu Sohbet Alanı
+        self.topic_textbox = ctk.CTkTextbox(self.topic_right_panel, font=("Consolas", 14), corner_radius=15, border_width=2, border_color="#4285f4")
+        self.topic_textbox.grid(row=2, column=0, pady=10, sticky="nsew")
+        self.topic_textbox.insert("1.0", "--- KONU BAZLI EĞİTİM ASİSTANI ---\nLütfen bir konu seçip 'SOHBETİ BAŞLAT' butonuna basın.\n")
+
+        # Konu Chat Giriş Alanı
+        self.topic_chat_input_frame = ctk.CTkFrame(self.topic_right_panel, corner_radius=15, border_width=1, border_color="#4285f4")
+        self.topic_chat_input_frame.grid(row=3, column=0, pady=10, sticky="ew")
         
-        ctk.CTkLabel(self.coach_chat_frame, text="AI'ya Sor:", font=("Arial", 12, "bold")).pack(side="left", padx=10, pady=10)
-        self.coach_chat_entry = ctk.CTkEntry(self.coach_chat_frame, placeholder_text="Dil öğrenimi veya bu analiz hakkında ne öğrenmek istersin?", height=35)
-        self.coach_chat_entry.pack(side="left", fill="x", expand=True, padx=10, pady=10)
+        self.topic_mic_btn = ctk.CTkButton(self.topic_chat_input_frame, text="🎤", width=35, height=35, fg_color="transparent", 
+                                           text_color="#4285f4", font=("Arial", 16), command=lambda: self.toggle_recording(source="topic_chat"))
+        self.topic_mic_btn.pack(side="left", padx=(10, 0), pady=10)
+
+        self.topic_chat_entry = ctk.CTkEntry(self.topic_chat_input_frame, placeholder_text="Seçili konu hakkında bir şey sor...", height=35)
+        self.topic_chat_entry.pack(side="left", fill="x", expand=True, padx=10, pady=10)
         
-        self.coach_ask_btn = ctk.CTkButton(self.coach_chat_frame, text="SOR", width=80, height=35, fg_color="#ff007f", command=self.ask_coach_ai_question)
-        self.coach_ask_btn.pack(side="right", padx=10, pady=10)
+        self.quiz_option_frame = ctk.CTkFrame(self.topic_chat_input_frame, fg_color="transparent")
+        self.quiz_options = {}
+        for opt in ["A", "B", "C", "D"]:
+            btn = ctk.CTkButton(self.quiz_option_frame, text=opt, width=40, font=("Inter", 12, "bold"),
+                                command=lambda o=opt: self.submit_quiz_answer(o))
+            btn.pack(side="left", padx=2)
+            self.quiz_options[opt] = btn
         
-        self.coach_chat_entry.bind("<Return>", lambda e: self.ask_coach_ai_question())
+        self.topic_speak_btn = ctk.CTkButton(self.topic_chat_input_frame, text="🔊", width=35, height=35, fg_color="transparent",
+                                             text_color="#10a37f", font=("Arial", 16), command=self._speak_topic_last_response)
+        # Hoparlör butonunu GÖNDER'in yanına (soluna) ekleyelim
+        self.topic_speak_btn.pack(side="right", padx=(0, 5), pady=10)
+
+        self.topic_ask_btn = ctk.CTkButton(self.topic_chat_input_frame, text="GÖNDER", width=80, height=35, fg_color="#4285f4", command=self.run_topic_ai_chat)
+        self.topic_ask_btn.pack(side="right", padx=(5, 10), pady=10)
+        
+        self.topic_chat_entry.bind("<Return>", lambda e: self.run_topic_ai_chat())
 
         # 5. AYARLAR PANELİ
         self.settings_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -766,14 +844,19 @@ class App(ctk.CTk):
         self.auto_vad_enabled = self.auto_vad_var.get()
         status = "açıldı" if self.auto_vad_enabled else "kapatıldı"
         print(f"Auto-VAD {status}.")
-    def toggle_recording(self):
+    def toggle_recording(self, source="home"):
         """
         Kayıt butonuna her basışımızda bu fonksiyon tetiklenir.
-        Eğer kayıt yapmıyorsak başlatır, zaten yapıyorsak durdururuz.
+        source: "home" veya "language" - Kaydın nereden başlatıldığını belirtir.
         """
         if not self.is_recording:
             self.is_recording = True
-            self.record_btn.configure(text="KAYDI DURDUR", fg_color="red")
+            self.active_recording_source = source
+            
+            # Sadece ilgili butonu güncelle
+            btn = self.record_btn if source == "home" else self.coach_record_btn
+            btn.configure(text="KAYDI DURDUR", fg_color="red")
+            
             self.animator.start_pulse() # Animasyonu başlat
             self.status_label.configure(text="Kaydediliyor...")
             self.audio_frames = []
@@ -786,7 +869,11 @@ class App(ctk.CTk):
             threading.Thread(target=self._record_thread, daemon=True).start()
         else:
             self.is_recording = False
-            self.record_btn.configure(text="KAYDI BAŞLAT", fg_color="green")
+            
+            # Sadece aktif olan butonu geri döndür
+            btn = self.record_btn if self.active_recording_source == "home" else self.coach_record_btn
+            btn.configure(text="KAYDI BAŞLAT", fg_color="green")
+            
             self.animator.stop("Kayıt durduruldu.")
             if hasattr(self, 'visualizer'):
                 self.visualizer.clear()
@@ -929,8 +1016,20 @@ class App(ctk.CTk):
                 "text": full_text
             })
             
-            # Sonucu hem Dashboard hem Analiz sekmelerindeki metin kutularına ekle
-            self.after(0, lambda: self.textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
+            # Kaynağa göre ilgili metin kutusuna yazdır
+            if self.active_recording_source == "home":
+                self.after(0, lambda: self.textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
+                self.after(0, lambda: self.textbox.see("end"))
+            elif self.active_recording_source == "language":
+                self.after(0, lambda: self.language_textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
+                self.after(0, lambda: self.language_textbox.see("end"))
+            elif self.active_recording_source == "topic_chat":
+                # Sesle yazma: Metni girişe koy ve otomatik gönder
+                self.after(0, lambda: self.topic_chat_entry.delete(0, "end"))
+                self.after(0, lambda: self.topic_chat_entry.insert(0, full_text))
+                self.after(0, lambda: self.run_topic_ai_chat())
+                
+            # Analiz sekmesi her zaman güncellenebilir (opsiyonel, bağımsızlık için kaldırılabilir)
             self.after(0, lambda: self.analysis_textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
             self.animator.stop("İşlem tamamlandı.")
         except Exception as e:
@@ -1196,6 +1295,299 @@ class App(ctk.CTk):
             self.after(0, lambda e=e: messagebox.showerror("Dil Koçu Hatası", f"Hata: {e}"))
         finally:
             self.after(0, lambda: self.run_coach_btn.configure(state="normal", text="DİL ANALİZİ BAŞLAT"))
+
+    # --- KONU BAZLI AI SOHBET MANTIĞI ---
+    def run_topic_ai_chat(self):
+        """Seçili konu üzerinden AI ile bağımsız bir sohbet başlatır veya devam ettirir."""
+        topic = self.topic_combo.get()
+        user_input = self.topic_chat_entry.get().strip()
+        
+        self.start_topic_btn.configure(state="disabled", text="...")
+        self.topic_ask_btn.configure(state="disabled")
+        
+        threading.Thread(target=self._topic_chat_logic, args=(topic, user_input), daemon=True).start()
+
+    def _topic_chat_logic(self, topic, user_input):
+        """Arka planda bağımsız konu chat isteğini yönetir ve hafızayı kullanır."""
+        try:
+            # Hafızayı Derle (Son 5 mesaj)
+            history_context = ""
+            for h in self.topic_chat_history[-5:]:
+                history_context += f"Öğrenci: {h['input']}\nSen: {h['output']}\n"
+
+            prompt = self._get_topic_prompt(topic, user_input, history_context)
+            system_msg = f"Sen {topic} konusunda uzman, cana yakın bir eğitmensin. " \
+                         f"Önceki konuşmaları hatırla ve öğrencinin gelişimine yardımcı ol."
+
+            if self.gemini_api_key:
+                client = GeminiClient(api_key=self.gemini_api_key)
+                response = client.generate_content(prompt, system_instruction=system_msg)
+                result = response
+            elif self.api_key:
+                client = OpenAI(api_key=self.api_key)
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                result = res.choices[0].message.content
+            else:
+                self.after(0, lambda: messagebox.showwarning("Hata", "API anahtarı eksik."))
+                return
+
+            self.last_topic_response = result
+            self.topic_chat_history.append({"topic": topic, "input": user_input, "output": result})
+            self.after(0, lambda: self._update_topic_ui(topic, user_input, result))
+            
+            # Otomatik Seslendirme Kontrolü
+            if self.auto_tts_topic_var.get():
+                self.after(0, self._speak_topic_last_response)
+                
+        except Exception as e:
+            self.after(0, lambda e=e: messagebox.showerror("Konu Sohbet Hatası", f"Hata: {e}"))
+        finally:
+            self.after(0, lambda: self.start_topic_btn.configure(state="normal", text="SOHBETİ BAŞLAT"))
+            self.after(0, lambda: self.topic_ask_btn.configure(state="normal"))
+            self.after(0, lambda: self.topic_chat_entry.delete(0, "end"))
+
+    def _get_topic_prompt(self, topic, user_input, history=""):
+        prompt = f"Konu: {topic}\n"
+        if history:
+            prompt += f"--- Sohbet Geçmişi ---\n{history}\n"
+        
+        if not user_input:
+            prompt += f"{topic} hakkında bana ilham verici bir başlangıç bilgisi veya fikir ver."
+        else:
+            prompt += f"Öğrencinin Yeni Mesajı: {user_input}"
+        return prompt
+
+    def _speak_topic_last_response(self):
+        """Mevcut seanstaki son AI cevabını seslendirir."""
+        if not self.last_topic_response:
+            return
+            
+        def tts_worker():
+            try:
+                client = OpenAI(api_key=self.api_key)
+                response = client.audio.speech.create(
+                    model="tts-1",
+                    voice=self.tts_voices.get(self.tts_voice_combo.get(), "nova"),
+                    input=self.last_topic_response[:2000] # Hız için limit
+                )
+                temp_file = f"temp_topic_tts_{int(time.time())}.mp3"
+                response.stream_to_file(temp_file)
+                self._play_audio(temp_file)
+            except Exception as e:
+                print(f"Topic TTS Error: {e}")
+                
+        threading.Thread(target=tts_worker, daemon=True).start()
+
+    def _update_topic_ui(self, topic, user_input, result):
+        if user_input:
+            msg = f"\n[SEN]: {user_input}\n[AI ({topic})]: {result}\n"
+        else:
+            msg = f"\n--- {topic} HAKKINDA BİR FİKİR/ÖNERİ ---\n{result}\n"
+            
+        self.topic_textbox.insert("end", msg)
+        self.topic_textbox.see("end")
+        self.status_label.configure(text=f"{topic} sohbeti güncellendi.")
+
+    # --- ADVANCED EDUCATION: QUIZ MANTIĞI ---
+    def run_topic_quiz(self):
+        """AI'dan konuyla ilgili 5 soruluk özel bir quiz oluşturmasını ister."""
+        topic = self.topic_combo.get()
+        if self.is_quiz_active:
+            messagebox.showwarning("Quiz Aktif", "Hali hazırda bir quiz devam ediyor!")
+            return
+            
+        self.is_quiz_active = True
+        self.current_quiz_questions = []
+        self.current_quiz_index = 0
+        self.quiz_score = 0
+        
+        self.start_quiz_btn.configure(state="disabled", text="HAZIRLANIYOR...")
+        threading.Thread(target=self._quiz_logic, args=(topic,), daemon=True).start()
+
+    def _quiz_logic(self, topic):
+        try:
+            prompt = f"""
+            {topic} konusu hakkında 5 soruluk, çoktan seçmeli bir Quiz hazırla.
+            Zorluk seviyeleri: 2 Kolay, 2 Orta, 1 Zor olmalı.
+            
+            [KRİTİK]: Yanıtın SADECE aşağıda belirtilen JSON formatında olmalı, başka hiçbir metin ekleme.
+            Format:
+            [
+              {{"question": "Soru metni...", "options": ["A) Şık1", "B) Şık2", "C) Şık3", "D) Şık4"], "answer": "A", "difficulty": "easy"}},
+              ...
+            ]
+            """
+            
+            if self.gemini_api_key:
+                client = GeminiClient(api_key=self.gemini_api_key)
+                response = client.generate_content(prompt)
+                result = response
+            elif self.api_key:
+                client = OpenAI(api_key=self.api_key)
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                result = res.choices[0].message.content
+            else:
+                self.is_quiz_active = False
+                self.after(0, lambda: messagebox.showwarning("Hata", "API anahtarı eksik."))
+                return
+
+            # JSON temizleme ve yükleme
+            import json
+            import re
+            json_match = re.search(r"(\[.*\])", result, re.DOTALL)
+            if json_match:
+                self.current_quiz_questions = json.loads(json_match.group(1))
+                self.after(0, self._show_next_quiz_question)
+            else:
+                raise ValueError("AI geçerli bir JSON quiz üretmedi.")
+                
+        except Exception as e:
+            self.is_quiz_active = False
+            self.after(0, lambda e=e: messagebox.showerror("Quiz Hatası", f"Quiz oluşturulamadı: {e}"))
+        finally:
+            self.after(0, lambda: self.start_quiz_btn.configure(state="normal", text="📝 QUIZ"))
+
+    def _show_next_quiz_question(self):
+        if self.current_quiz_index < len(self.current_quiz_questions):
+            q = self.current_quiz_questions[self.current_quiz_index]
+            
+            # UI Düzenlemesi: Giriş alanını gizle, şıkları göster
+            self.topic_chat_entry.pack_forget()
+            self.topic_ask_btn.pack_forget()
+            self.quiz_option_frame.pack(side="left", padx=10, pady=10)
+            
+            msg = f"\n--- SORU {self.current_quiz_index + 1} ({q['difficulty'].upper()}) ---\n"
+            msg += f"{q['question']}\n"
+            for opt in q['options']:
+                msg += f"{opt}\n"
+            
+            self.topic_textbox.insert("end", msg)
+            self.topic_textbox.see("end")
+        else:
+            self.finish_quiz()
+
+    def submit_quiz_answer(self, user_choice):
+        q = self.current_quiz_questions[self.current_quiz_index]
+        correct = q['answer'].upper()
+        
+        if user_choice == correct:
+            self.quiz_score += 1
+            feedback = "✅ Doğru!"
+        else:
+            feedback = f"❌ Yanlış. Doğru cevap: {correct}"
+            
+        self.topic_textbox.insert("end", f"Cevabın: {user_choice} - {feedback}\n")
+        self.current_quiz_index += 1
+        self.after(500, self._show_next_quiz_question)
+
+    def finish_quiz(self):
+        self.is_quiz_active = False
+        total = len(self.current_quiz_questions)
+        result_text = f"\n🏆 QUIZ TAMAMLANDI!\nSkorun: {self.quiz_score}/{total}\n"
+        
+        if self.quiz_score == total: result_text += "Mükemmel! Bu konuya tam hakimsin. 🌟"
+        elif self.quiz_score >= total // 2: result_text += "Güzel iş! Biraz daha tekrarla uzman olabilirsin. 👍"
+        else: result_text += "Biraz daha çalışmaya ne dersin? AI sana yardımcı olabilir. 📚"
+        
+        self.topic_textbox.insert("end", result_text + "\n" + "="*30 + "\n")
+        self.topic_textbox.see("end")
+        
+        # UI'yı eski haline getir
+        self.quiz_option_frame.pack_forget()
+        self.topic_chat_entry.pack(side="left", fill="x", expand=True, padx=10, pady=10)
+        self.topic_ask_btn.pack(side="right", padx=10, pady=10)
+
+    # --- ADVANCED EDUCATION: FLASHCARD MANTIĞI ---
+    def generate_flashcards(self):
+        """Mevcut konu sohbetinden 5 adet bilgi kartı üretir."""
+        topic = self.topic_combo.get()
+        chat_text = self.topic_textbox.get("1.0", "end").strip()
+        
+        if len(chat_text) < 50:
+            messagebox.showwarning("Yetersiz Veri", "Bilgi kartı üretmek için önce biraz sohbet etmelisiniz.")
+            return
+
+        self.flashcard_btn.configure(state="disabled", text="ÜRETİLİYOR...")
+        threading.Thread(target=self._flashcard_logic, args=(topic, chat_text), daemon=True).start()
+
+    def _flashcard_logic(self, topic, chat_text):
+        try:
+            prompt = f"""
+            Aşağıdaki {topic} konulu sohbetten en önemli 5 kavramı/terimi seç ve bunları bilgi kartı formatında açıkla.
+            
+            Format:
+            🎴 [TERİM]: [AÇIKLAMA]
+            
+            Sohbet İçeriği:
+            {chat_text[:2000]}
+            """
+            
+            if self.gemini_api_key:
+                client = GeminiClient(api_key=self.gemini_api_key)
+                result = client.generate_content(prompt)
+            elif self.api_key:
+                client = OpenAI(api_key=self.api_key)
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                result = res.choices[0].message.content
+            else:
+                return
+
+            self.topic_flashcards = result
+            self.after(0, lambda: self._update_flashcard_ui(topic, result))
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Hata", f"Kartlar üretilemedi: {e}"))
+        finally:
+            self.after(0, lambda: self.flashcard_btn.configure(state="normal", text="🎴 KARTLAR"))
+
+    def _update_flashcard_ui(self, topic, result):
+        msg = f"\n✨ {topic} İÇİN ÖZEL BİLGİ KARTLARI ✨\n{result}\n"
+        msg += "="*30 + "\n"
+        self.topic_textbox.insert("end", msg)
+        self.topic_textbox.see("end")
+        self.status_label.configure(text="Bilgi kartları oluşturuldu.")
+
+    # --- ADVANCED EDUCATION: PDF DIŞA AKTARIM ---
+    def save_topic_pdf(self):
+        """Eğitim asistanı seansını PDF olarak kaydeder."""
+        topic = self.topic_combo.get()
+        chat_history = self.topic_textbox.get("1.0", "end").strip()
+        
+        if len(chat_history) < 50:
+            messagebox.showwarning("Uyarı", "Kaydedilecek yeterli içerik yok.")
+            return
+
+        path = filedialog.asksaveasfilename(defaultextension=".pdf", 
+                                           filetypes=[("PDF Dosyası", "*.pdf")],
+                                           initialfile=f"Egitim_Raporu_{topic}_{datetime.datetime.now().strftime('%Y%m%d')}.pdf")
+        if not path: return
+
+        try:
+            if ReportGenerator:
+                reporter = ReportGenerator()
+                # Flashcard ve Quiz verilerini de ekle
+                metadata = {
+                    "topic": topic,
+                    "date": datetime.datetime.now().strftime("%d.%m.%Y %H:%M"),
+                    "score": f"{self.quiz_score}/5" if hasattr(self, 'quiz_score') else "N/A"
+                }
+                reporter.create_education_report(path, chat_history, metadata)
+                messagebox.showinfo("Başarılı", f"{topic} Eğitim Raporu kaydedildi.")
+            else:
+                messagebox.showerror("Hata", "Rapor oluşturucu modülü eksik.")
+        except Exception as e:
+            messagebox.showerror("Hata", f"PDF oluşturulamadı: {e}")
 
 
     def _update_language_ui(self, result):
