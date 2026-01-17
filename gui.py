@@ -228,7 +228,7 @@ class App(ctk.CTk):
         # Auto-VAD (Silence Detection) Ayarları
         self.silence_threshold = 0.01 # Sessizlik eşiği (RMS)
         self.silence_start_time = None
-        self.auto_vad_enabled = True # Varsayılan olarak açık
+        self.auto_vad_enabled = False # Kullanıcının isteği üzerine varsayılan olarak KAPALI
         self.last_rms = 0
         
         # --- Başlangıç Temizliği ---
@@ -683,7 +683,7 @@ class App(ctk.CTk):
         self.noise_reduce_var = ctk.BooleanVar(value=True)
         ctk.CTkSwitch(self.model_group, text="Gelişmiş Gürültü Azaltma (Önerilen)", variable=self.noise_reduce_var).pack(pady=5)
 
-        self.auto_vad_var = ctk.BooleanVar(value=True)
+        self.auto_vad_var = ctk.BooleanVar(value=False)
         ctk.CTkSwitch(self.model_group, text="Otomatik Sessizlik Algılama (Auto-VAD)", variable=self.auto_vad_var, command=self._toggle_auto_vad).pack(pady=5)
 
         # Varsayılan Sayfayı Göster
@@ -900,11 +900,13 @@ class App(ctk.CTk):
                             data = self.audio_queue.get_nowait()
                             self.audio_frames.append(data)
                             
-                            # --- Auto-VAD İşlemi ---
-                            if self.auto_vad_enabled and (time.time() - self.recording_start_time > 3.0):
-                                rms = np.sqrt(np.mean(data**2))
-                                self.last_rms = rms
-                                
+                            # --- Manuel Kontrol: Kayıt durdurulana kadar devam eder ---
+                            # Sadece görselleştirme ve RMS hesaplama (isteğe bağlı) yapılır
+                            rms = np.sqrt(np.mean(data**2))
+                            self.last_rms = rms
+                            
+                            # --- Auto-VAD İşlemi (Eğer kullanıcı Ayarlardan açmışsa) ---
+                            if self.auto_vad_enabled and (time.time() - self.recording_start_time > 5.0): # 5 sn'den sonra başlasın
                                 if rms < self.silence_threshold:
                                     if self.silence_start_time is None:
                                         self.silence_start_time = time.time()
@@ -939,10 +941,9 @@ class App(ctk.CTk):
                 audio_data = audio_data / max_val
                 
             # 2. Gürültü Azaltma (Eğer aktifse)
-            if self.noise_reduce_var.get():
                 try:
-                    # Arka plan gürültüsünü akıllıca azalt
-                    audio_data = nr.reduce_noise(y=audio_data.flatten(), sr=self.fs, prop_decrease=0.7)
+                    # Arka plan gürültüsünü akıllıca azalt (Daha hassas bir oran: 0.6)
+                    audio_data = nr.reduce_noise(y=audio_data.flatten(), sr=self.fs, prop_decrease=0.6)
                     audio_data = audio_data.reshape(-1, 1) # Formatı koru
                 except Exception as nre:
                     print(f"Gürültü azaltma hatası: {nre}")
@@ -1407,14 +1408,26 @@ class App(ctk.CTk):
         self.current_quiz_index = 0
         self.quiz_score = 0
         
+        # Son 10 mesajı bağlam olarak al (daha odaklı bir quiz için)
+        history_context = ""
+        for h in self.topic_chat_history[-10:]:
+            history_context += f"Öğrenci: {h['input']}\nSen: {h['output']}\n"
+            
         self.start_quiz_btn.configure(state="disabled", text="HAZIRLANIYOR...")
-        threading.Thread(target=self._quiz_logic, args=(topic,), daemon=True).start()
+        threading.Thread(target=self._quiz_logic, args=(topic, history_context), daemon=True).start()
 
-    def _quiz_logic(self, topic):
+    def _quiz_logic(self, topic, context):
         try:
             prompt = f"""
-            {topic} konusu hakkında 5 soruluk, çoktan seçmeli bir Quiz hazırla.
-            Zorluk seviyeleri: 2 Kolay, 2 Orta, 1 Zor olmalı.
+            {topic} konusu ve aşağıdaki sohbet geçmişi hakkında 5 soruluk, çoktan seçmeli bir Quiz hazırla.
+            
+            [DİKKAT]: Sorular KESİNLİKLE aşağıdaki 'Sohbet Geçmişi'ndeki bilgilere dayanmalı.
+            [KRİTİK]: Özellikle sohbetin EN SONUNDA konuşulan konulara ağırlık ver ve soruları oradan seç. 
+            
+            Sohbet Geçmişi:
+            {context if context else f"{topic} hakkında genel bilgiler."}
+            
+            Zorluk seviyeleri: 1 Kolay, 2 Orta, 2 Zor olmalı.
             
             [KRİTİK]: Yanıtın SADECE aşağıda belirtilen JSON formatında olmalı, başka hiçbir metin ekleme.
             Format:
