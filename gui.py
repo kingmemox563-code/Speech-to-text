@@ -202,6 +202,58 @@ class App(ctk.CTk):
         self.analysis_results = {"OpenAI": "", "Gemini": ""}
         self.all_sentiment_stats = {"OpenAI": None, "Gemini": None}
 
+        # --- EĞİTİM VE SENARYO VERİLERİ ---
+        self.scenarios_data = {
+            "Matematik": {
+                "🧠 Problem Çözme Yarışması": [],
+                "🎓 Profesör Modu": ["Cahit Arf", "Ali Nesin", "Pisagor", "Öklid"],
+                "🌍 Gerçek Hayat Uygulamaları": ["Köprü Mühendisi", "Finans Analisti", "Kriptolog"],
+                "🦉 Sokratik Öğretmen": []
+            },
+            "Fizik": {
+                "🧪 Deney Simülasyonu": ["Kuantum Mekaniği", "Termodinamik", "Optik"],
+                "🌌 Evrenin Sırları": ["Albert Einstein", "Stephen Hawking", "Richard Feynman", "Newton", "Marie Curie"],
+                "🚀 Mühendislik Problemleri": ["Elon Musk (Rocket Scientist)", "Uçak Mühendisi"],
+                "🤔 Kavramsal Tartışma": []
+            },
+            "Kimya": {
+                "⚗️ Laboratuvar Kazaları": [],
+                "🧬 Moleküler Keşif": ["Aziz Sancar", "Marie Curie", "Dmitri Mendeleev", "Rosalind Franklin"],
+                "💥 Patlayıcı Deneyler": ["Alfred Nobel"],
+                "🍳 Mutfak Kimyası (Eğlenceli)": []
+            },
+            "Biyoloji": {
+                "🦠 Hastalık Dedektifi": [],
+                "🧬 Genetik Mühendisi": ["CRISPR Uzmanı", "Darwin", "Mendel"],
+                "🌿 Doğa Gözlemcisi": [],
+                "🧠 Nörobilim Uzmanı": []
+            },
+            "Yapay Zeka": {
+                "🤖 Gelecek Senaryoları": ["Ütopik", "Distopik", "Gerçekçi"],
+                "🧠 Etik Tartışma": ["Trolley Problemi", "Bilinç Sorunsalı"],
+                "💻 Teknik Mülakat": ["NLP Uzmanı", "CV Uzmanı", "LLM Mimarı"],
+                "🔮 Teknoloji Kahini": []
+            },
+            "Kodlama": {
+                "🛑 Code Review (Sert)": ["Huysuz Senior Dev", "Temiz Kod Takıntılısı", "Performans Canavarı"],
+                "💼 Google Mülakatı": ["Algoritma Sorusu", "Sistem Tasarımı"],
+                "🐞 Bug Avcısı": [],
+                "👶 Bana 5 Yaşındayım Gibi Anlat": []
+            },
+            "Tarih": {
+                "👑 Liderle Görüşme": ["Fatih Sultan Mehmet", "M.K. Atatürk", "Napolyon", "Jül Sezar", "Kanuni", "Cengiz Han"],
+                "⏳ Zaman Yolcusu": ["İstanbul'un Fethi (1453)", "Fransız İhtilali (1789)", "Kurtuluş Savaşı", "Ay'a İniş"],
+                "📜 Alternatif Tarih": ["Ya Hitler Kazansaydı?", "Ya Roma Çökmeseydi?"],
+                "🏛️ Müze Rehberi": []
+            },
+            "Felsefe": {
+                "⚖️ Münazara (Debate)": [],
+                "🤔 Düşünce Deneyi": ["Mağara Alegorisi (Platon)", "Gemisi (Theseus)"],
+                "🧠 Filozofla Sohbet": ["Sokrates", "Nietzsche", "Kant", "Aristoteles", "Mevlana"],
+                "😈 Şeytanın Avukatı": []
+            }
+        }
+
         # Ana Pencere Konfigürasyonu
         self.title("Ses Analiz Sistemi")
         self.geometry("1300x950")
@@ -533,13 +585,27 @@ class App(ctk.CTk):
         self.topic_settings = ctk.CTkFrame(self.topic_right_panel)
         self.topic_settings.grid(row=0, column=0, pady=10, sticky="ew")
         
-        ctk.CTkLabel(self.topic_settings, text="Konu Seçin:").pack(side="left", padx=10, pady=10)
-        self.topic_combo = ctk.CTkComboBox(self.topic_settings, values=["Matematik", "Fizik", "Kimya", "Biyoloji", "Yapay Zeka", "Kodlama", "Tarih", "Felsefe"], width=150)
+        ctk.CTkLabel(self.topic_settings, text="Konu:").pack(side="left", padx=(10, 2), pady=10)
+        self.topic_combo = ctk.CTkComboBox(self.topic_settings, values=list(self.scenarios_data.keys()), width=110, command=self._on_topic_change)
         self.topic_combo.set("Kodlama")
-        self.topic_combo.pack(side="left", padx=5)
+        self.topic_combo.pack(side="left", padx=2)
 
-        self.start_topic_btn = ctk.CTkButton(self.topic_settings, text="SOHBETİ BAŞLAT", fg_color="#4285f4", font=("Inter", 12, "bold"),
-                                            command=self.run_topic_ai_chat, width=120)
+        # Yeni Senaryo ve Alt Seçim Kutuları
+        self.scenario_combo = ctk.CTkComboBox(self.topic_settings, values=[], width=140, command=self._on_scenario_change)
+        self.scenario_combo.set("Senaryo Seçiniz")
+        self.scenario_combo.pack(side="left", padx=2)
+        
+        self.sub_option_combo = ctk.CTkComboBox(self.topic_settings, values=[], width=130)
+        self.sub_option_combo.set("Karakter Seçiniz")
+        # Başlangıçta gizli olabilir ama grid kullandığımız için pack_forget yapabiliriz, 
+        # şimdilik varsayılan olarak gösterip boş bırakalım veya kodla yönetelim.
+        self.sub_option_combo.pack(side="left", padx=2)
+
+        # İlk Başlatma: Kodlama için senaryoları yükle
+        self._on_topic_change("Kodlama")
+
+        self.start_topic_btn = ctk.CTkButton(self.topic_settings, text="BAŞLAT", fg_color="#4285f4", font=("Inter", 12, "bold"),
+                                            command=self.run_topic_ai_chat, width=80)
         self.start_topic_btn.pack(side="left", padx=5)
 
         self.start_quiz_btn = ctk.CTkButton(self.topic_settings, text="📝 QUIZ", fg_color="#10a37f", font=("Inter", 12, "bold"),
@@ -1297,18 +1363,51 @@ class App(ctk.CTk):
         finally:
             self.after(0, lambda: self.run_coach_btn.configure(state="normal", text="DİL ANALİZİ BAŞLAT"))
 
+    # --- SENARYO YÖNETİMİ ---
+    def _on_topic_change(self, choice):
+        """Konu değiştiğinde senaryo listesini güncelle."""
+        if choice in self.scenarios_data:
+            scenarios = list(self.scenarios_data[choice].keys())
+            self.scenario_combo.configure(values=scenarios)
+            if scenarios:
+                self.scenario_combo.set(scenarios[0])
+                self._on_scenario_change(scenarios[0])
+            else:
+                self.scenario_combo.set("Senaryo Yok")
+                self.sub_option_combo.configure(values=[])
+                self.sub_option_combo.set("-")
+
+    def _on_scenario_change(self, choice):
+        """Senaryo değiştiğinde alt seçenekleri (karakterleri) güncelle."""
+        topic = self.topic_combo.get()
+        if topic in self.scenarios_data and choice in self.scenarios_data[topic]:
+            sub_options = self.scenarios_data[topic][choice]
+            if sub_options:
+                self.sub_option_combo.configure(state="normal", values=sub_options)
+                self.sub_option_combo.set(sub_options[0])
+            else:
+                self.sub_option_combo.configure(values=[], state="disabled")
+                self.sub_option_combo.set("-")
+
     # --- KONU BAZLI AI SOHBET MANTIĞI ---
     def run_topic_ai_chat(self):
         """Seçili konu üzerinden AI ile bağımsız bir sohbet başlatır veya devam ettirir."""
         topic = self.topic_combo.get()
+        scenario = self.scenario_combo.get()
+        sub_option = self.sub_option_combo.get()
         user_input = self.topic_chat_entry.get().strip()
+        
+        # Eğer start butonuna basıldıysa ama input boşsa, başlatma mesajı iste
+        is_start = False
+        if not user_input:
+            is_start = True
         
         self.start_topic_btn.configure(state="disabled", text="...")
         self.topic_ask_btn.configure(state="disabled")
         
-        threading.Thread(target=self._topic_chat_logic, args=(topic, user_input), daemon=True).start()
+        threading.Thread(target=self._topic_chat_logic, args=(topic, user_input, scenario, sub_option), daemon=True).start()
 
-    def _topic_chat_logic(self, topic, user_input):
+    def _topic_chat_logic(self, topic, user_input, scenario, sub_option):
         """Arka planda bağımsız konu chat isteğini yönetir ve hafızayı kullanır."""
         try:
             # Hafızayı Derle (Son 5 mesaj)
@@ -1316,12 +1415,35 @@ class App(ctk.CTk):
             for h in self.topic_chat_history[-5:]:
                 history_context += f"Öğrenci: {h['input']}\nSen: {h['output']}\n"
 
+            # Sistem Mesajını (Persona) Oluştur
+            system_msg = f"Sen {topic} konusunda uzmansın. "
+            
+            # Senaryo ve Karakter Entegrasyonu
+            if scenario and scenario != "Senaryo Seçiniz":
+                system_msg += f"Şu anki modun: '{scenario}'. "
+                # Karakter varsa
+                if sub_option and sub_option != "-" and sub_option != "Karakter Seçiniz":
+                    system_msg += f"Karakterin: '{sub_option}'. Lütfen BU KARAKTER GİBİ konuş, onun sözlerini veya tarzını taklit et. "
+                
+                # Özel Senaryo Talimatları
+                if "Sokratik" in scenario:
+                    system_msg += "ASLA direkt cevap verme. Sadece soru sorarak öğrencinin bulmasını sağla. "
+                elif "Code Review" in scenario:
+                    system_msg += "Kodu çok sıkı eleştir, hataları bul, best practice öner. "
+                elif "5 Yaşındayım" in scenario or "Feynman" in scenario:
+                    system_msg += "Çok basit, analojilerle ve eğlenceli anlat. "
+                elif "Münazara" in scenario or "Şeytanın Avukatı" in scenario:
+                    system_msg += "Öğrencinin fikrine nazikçe ama zekice karşı çık, antitez sun. "
+                elif "Mülakat" in scenario:
+                    system_msg += "Mülakat yapıyorsun. Zor teknik sorular sor, cevabı puanla. "
+            else:
+                system_msg += "Cana yakın ve öğretici bir dille yardımcı ol."
+
             prompt = self._get_topic_prompt(topic, user_input, history_context)
-            system_msg = f"Sen {topic} konusunda uzman, cana yakın bir eğitmensin. " \
-                         f"Önceki konuşmaları hatırla ve öğrencinin gelişimine yardımcı ol."
 
             if self.gemini_api_key:
                 client = GeminiClient(api_key=self.gemini_api_key)
+                # System instruction Gemini için ayrı parametre
                 response = client.generate_content(prompt, system_instruction=system_msg)
                 result = response
             elif self.api_key:
@@ -1525,23 +1647,37 @@ class App(ctk.CTk):
         topic = self.topic_combo.get()
         chat_text = self.topic_textbox.get("1.0", "end").strip()
         
-        if len(chat_text) < 50:
-            messagebox.showwarning("Yetersiz Veri", "Bilgi kartı üretmek için önce biraz sohbet etmelisiniz.")
+        if len(chat_text) < 20 and not self.topic_chat_history:
+            messagebox.showwarning("Yetersiz Veri", "Bilgi kartı üretmek için önce bir konu hakkında sohbet etmelisiniz veya AI size bir şeyler anlatmalı.")
             return
 
         self.flashcard_btn.configure(state="disabled", text="ÜRETİLİYOR...")
+        
+        # Eğer textbox boşsa ama geçmiş varsa geçmişi kullan
+        if not chat_text and self.topic_chat_history:
+            for h in self.topic_chat_history:
+                chat_text += f"{h['input']} {h['output']} "
+        
         threading.Thread(target=self._flashcard_logic, args=(topic, chat_text), daemon=True).start()
 
     def _flashcard_logic(self, topic, chat_text):
         try:
             prompt = f"""
-            Aşağıdaki {topic} konulu sohbetten en önemli 5 kavramı/terimi seç ve bunları bilgi kartı formatında açıkla.
+            GÖREV: Aşağıdaki sohbet metnini veya konu başlığını analiz et ve öğrenci için çalışma kartları (Flashcards) oluştur.
+            
+            KONU: {topic}
+            
+            [KURALLAR]:
+            1. En önemli ve kilit 5 kavramı seç.
+            2. Eğer metin çok kısaysa, {topic} konusuyla ilgili en temel 5 kavramı kendin üret.
+            3. Her kartta bir Terim ve bir Açıklama olsun.
+            4. Açıklamalar kısa, akılda kalıcı ve eğitici olsun.
             
             Format:
             🎴 [TERİM]: [AÇIKLAMA]
             
-            Sohbet İçeriği:
-            {chat_text[:2000]}
+            Analiz Edilecek Metin:
+            {chat_text[:4000]}
             """
             
             if self.gemini_api_key:
