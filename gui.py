@@ -202,6 +202,30 @@ class App(ctk.CTk):
         self.analysis_results = {"OpenAI": "", "Gemini": ""}
         self.all_sentiment_stats = {"OpenAI": None, "Gemini": None}
 
+        # --- KARAKTER SES VE STİL EŞLEŞTİRMELERİ ---
+        self.character_voices = {
+            "Fatih Sultan Mehmet": "onyx",
+            "M.K. Atatürk": "onyx",
+            "Napolyon": "echo",
+            "Jül Sezar": "echo",
+            "Kanuni": "onyx",
+            "Cengiz Han": "echo",
+            "Albert Einstein": "fable",
+            "Stephen Hawking": "fable",
+            "Marie Curie": "shimmer",
+            "Aziz Sancar": "alloy",
+            "Sokrates": "fable",
+            "Nietzsche": "echo"
+        }
+        
+        self.character_styles = {
+            "Fatih Sultan Mehmet": "Bir Osmanlı Sultanı gibi konuş. Kelimelerin otoriter, bilge ve hafif arkaik (Osmanlı Türkçesi esintili) olsun. Öğrenciye 'Lalam' veya 'Bilesin ki' gibi ifadelerle hitap et. İstanbul'un fatihi olduğunu hissettir.",
+            "M.K. Atatürk": "M.K. Atatürk gibi konuş. Vizyoner, kararlı, modern ve teşvik edici bir üslup kullan. Hitabetin güçlü olsun. Milli mücadele ruhunu yansıt.",
+            "Albert Einstein": "Biraz dağınık ama dahi bir profesör gibi konuş. Karmaşık konuları basit analojilerle anlat, merak uyandır. 'Hayal gücü bilgiden daha önemlidir' felsefesini yansıt.",
+            "Marie Curie": "Tutkulu ve azimli bir bilim insanı olarak konuş. Laboratuvar deneyimlerinden, radyoaktiviteden ve bilimin zorluklarından bahset.",
+            "Sokrates": "Sadece sorular sorarak karşındakinin gerçeği kendi kendine bulmasını sağlayan Sokratik yöntemi kullan. Bilgeliğini alçakgönüllülükle harmanla."
+        }
+
         # --- EĞİTİM VE SENARYO VERİLERİ ---
         self.scenarios_data = {
             "Matematik": {
@@ -1423,7 +1447,11 @@ class App(ctk.CTk):
                 system_msg += f"Şu anki modun: '{scenario}'. "
                 # Karakter varsa
                 if sub_option and sub_option != "-" and sub_option != "Karakter Seçiniz":
-                    system_msg += f"Karakterin: '{sub_option}'. Lütfen BU KARAKTER GİBİ konuş, onun sözlerini veya tarzını taklit et. "
+                    system_msg += f"Karakterin: '{sub_option}'. "
+                    if sub_option in self.character_styles:
+                        system_msg += f"TARZ TALİMATI: {self.character_styles[sub_option]} "
+                    else:
+                        system_msg += f"Lütfen BU KARAKTER GİBİ konuş, onun sözlerini veya tarzını taklit et. "
                 
                 # Özel Senaryo Talimatları
                 if "Sokratik" in scenario:
@@ -1491,12 +1519,19 @@ class App(ctk.CTk):
         if not self.last_topic_response:
             return
             
+        # Karakter sesini belirle (Eğer seçilen bir karakter varsa)
+        sub_option = self.sub_option_combo.get()
+        character_voice = self.character_voices.get(sub_option)
+        
+        # Eğer karakter sesi varsa onu kullan, yoksa ayarlardaki sesi kullan
+        selected_voice = character_voice if character_voice else self.tts_voices.get(self.tts_voice_combo.get(), "nova")
+            
         def tts_worker():
             try:
                 client = OpenAI(api_key=self.api_key)
                 response = client.audio.speech.create(
                     model="tts-1",
-                    voice=self.tts_voices.get(self.tts_voice_combo.get(), "nova"),
+                    voice=selected_voice,
                     input=self.last_topic_response[:2000] # Hız için limit
                 )
                 temp_file = f"temp_topic_tts_{int(time.time())}.mp3"
