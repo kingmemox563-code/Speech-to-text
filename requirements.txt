@@ -18,3 +18,4 @@ Pillow
 python-docx
 pywinstyles
 pygame
+elevenlabs

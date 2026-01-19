@@ -40,11 +40,13 @@ try:
     from analytics import AnalyticsGenerator
     from report_generator import ReportGenerator
     from visualizer import AudioVisualizer
+    from elevenlabs_manager import ElevenLabsManager
 except ImportError:
     # Eğer bu dosyalar mevcut değilse uygulama hatasız çalışmaya devam eder
     AnalyticsGenerator = None
     ReportGenerator = None
     AudioVisualizer = None
+    ElevenLabsManager = None
 
 class SentimentTimeline(ctk.CTkFrame):
     """Analiz sekmesi için etkileşimli duygu zaman çizelgesi."""
@@ -195,12 +197,20 @@ class App(ctk.CTk):
         self.current_quiz_index = 0
         self.quiz_score = 0
         self.topic_flashcards = []
-        self.auto_tts_topic_var = tk.BooleanVar(value=False)
+        self.auto_tts_topic_var = tk.BooleanVar(value=True) # Varsayılan olarak açık
         self.last_topic_response = ""
         
         # Analiz Sonuçlarını Saklama (Çoklu PDF raporu için)
         self.analysis_results = {"OpenAI": "", "Gemini": ""}
         self.all_sentiment_stats = {"OpenAI": None, "Gemini": None}
+
+        # ElevenLabs Ses Klonlama Yöneticisi
+        self.eleven_api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+        if ElevenLabsManager:
+            self.eleven_manager = ElevenLabsManager(api_key=self.eleven_api_key)
+        else:
+            self.eleven_manager = None
+        self.eleven_voices = [] # [[name, id], ...]
 
         # --- KARAKTER SES VE STİL EŞLEŞTİRMELERİ ---
         self.character_voices = {
@@ -682,15 +692,14 @@ class App(ctk.CTk):
         
         self.topic_chat_entry.bind("<Return>", lambda e: self.run_topic_ai_chat())
 
-        # 5. AYARLAR PANELİ
-        self.settings_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.settings_frame.grid_columnconfigure(0, weight=1)
+        # 5. AYARLAR PANELİ (Kaydırılabilir)
+        self.settings_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
         
-        ctk.CTkLabel(self.settings_frame, text="SİSTEM AYARLARI", font=("Arial", 22, "bold")).grid(row=0, column=0, pady=20)
+        ctk.CTkLabel(self.settings_frame, text="SİSTEM AYARLARI", font=("Arial", 22, "bold")).pack(pady=20)
 
         # API Ayarları Grubu
         self.api_group = ctk.CTkFrame(self.settings_frame)
-        self.api_group.grid(row=1, column=0, padx=40, pady=10, sticky="ew")
+        self.api_group.pack(padx=40, pady=10, fill="x")
         
         ctk.CTkLabel(self.api_group, text="API YAPILANDIRMASI", font=("Arial", 14, "bold")).pack(pady=10)
         
@@ -706,7 +715,7 @@ class App(ctk.CTk):
 
         # Model Ayarları Grubu
         self.model_group = ctk.CTkFrame(self.settings_frame)
-        self.model_group.grid(row=2, column=0, padx=40, pady=10, sticky="ew")
+        self.model_group.pack(padx=40, pady=10, fill="x")
         
         ctk.CTkLabel(self.model_group, text="MODEL VE DONANIM", font=("Arial", 14, "bold")).pack(pady=10)
 
@@ -775,6 +784,33 @@ class App(ctk.CTk):
 
         self.auto_vad_var = ctk.BooleanVar(value=False)
         ctk.CTkSwitch(self.model_group, text="Otomatik Sessizlik Algılama (Auto-VAD)", variable=self.auto_vad_var, command=self._toggle_auto_vad).pack(pady=5)
+
+        # ElevenLabs Ses Klonlama Grubu
+        self.eleven_group = ctk.CTkFrame(self.settings_frame)
+        self.eleven_group.pack(padx=40, pady=10, fill="x")
+        
+        ctk.CTkLabel(self.eleven_group, text="ELEVENLABS SES KLONLAMA (TTS)", font=("Arial", 14, "bold")).pack(pady=10)
+        
+        eleven_grid = ctk.CTkFrame(self.eleven_group, fg_color="transparent")
+        eleven_grid.pack(pady=5)
+        
+        ctk.CTkLabel(eleven_grid, text="API Anahtarı:").grid(row=0, column=0, padx=10)
+        self.eleven_api_entry = ctk.CTkEntry(eleven_grid, width=300, show="*")
+        self.eleven_api_entry.insert(0, self.eleven_api_key)
+        self.eleven_api_entry.grid(row=0, column=1, pady=5)
+        
+        self.eleven_enable_var = ctk.BooleanVar(value=False)
+        self.eleven_switch = ctk.CTkSwitch(eleven_grid, text="ElevenLabs TTS Kullan", variable=self.eleven_enable_var)
+        self.eleven_switch.grid(row=1, column=0, columnspan=2, pady=10)
+        
+        ctk.CTkLabel(eleven_grid, text="Seçili Ses:").grid(row=2, column=0, padx=10)
+        self.eleven_voice_combo = ctk.CTkComboBox(eleven_grid, values=["Sesler Yükleniyor..."], width=200)
+        self.eleven_voice_combo.grid(row=2, column=1, pady=5)
+        
+        ctk.CTkButton(self.eleven_group, text="Ses Listesini Güncelle / Bağlan", command=self._refresh_eleven_voices).pack(pady=10)
+        
+        # İlk yükleme
+        self.after(2000, self._refresh_eleven_voices)
 
         # Varsayılan Sayfayı Göster
         self.select_frame_by_name("home")
@@ -882,6 +918,20 @@ class App(ctk.CTk):
     def _tts_worker(self):
         """TTS işlemini arka planda yapar."""
         try:
+            # --- ELEVENLABS SES KLONLAMA KONTROLÜ ---
+            if self.eleven_enable_var.get() and self.eleven_manager:
+                selected_voice_name = self.eleven_voice_combo.get()
+                voice_id = next((v[1] for v in self.eleven_voices if v[0] == selected_voice_name), None)
+                
+                if voice_id:
+                    self.animator.start_loading("ElevenLabs Ses Sentezleniyor")
+                    temp_mp3 = self.eleven_manager.generate_speech(self.last_analysis[:1000], voice_id)
+                    self.animator.stop("Ses Sentezlendi")
+                    if temp_mp3:
+                        self._play_audio(temp_mp3)
+                    return
+
+            # --- STANDART OPENAI TTS ---
             if not self.api_key:
                 self.after(0, lambda: messagebox.showerror("Hata", "OpenAI API anahtarı bulunamadı."))
                 return
@@ -900,15 +950,13 @@ class App(ctk.CTk):
                 input=self.last_analysis[:4000]
             )
             
-            # Dosya kilitlenmesini önlemek için benzersiz isim kullan veya mixer'i durdur
             import time
             temp_tts = f"temp_tts_{int(time.time())}.mp3"
             response.stream_to_file(temp_tts)
-            
-            # Çalmadan önce temizlik yap (Eski dosyaları silmeye çalış)
             self._play_audio(temp_tts)
         except Exception as e:
             self.after(0, lambda e=e: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
+            if hasattr(self, 'animator'): self.animator.stop("TTS Hatası")
 
     def _send_quick_chat(self, prompt):
         """Hızlı aksiyon butonları için prompt gönderir."""
@@ -1529,15 +1577,29 @@ class App(ctk.CTk):
         if not self.last_topic_response:
             return
             
-        # Karakter sesini belirle (Eğer seçilen bir karakter varsa)
-        sub_option = self.sub_option_combo.get()
-        character_voice = self.character_voices.get(sub_option)
-        
-        # Eğer karakter sesi varsa onu kullan, yoksa ayarlardaki sesi kullan
-        selected_voice = character_voice if character_voice else self.tts_voices.get(self.tts_voice_combo.get(), "nova")
-            
         def tts_worker():
             try:
+                self.status_label.configure(text="Ses hazırlanıyor...")
+                # --- ELEVENLABS SES KLONLAMA KONTROLÜ ---
+                if self.eleven_enable_var.get() and self.eleven_manager:
+                    selected_voice_name = self.eleven_voice_combo.get()
+                    voice_id = next((v[1] for v in self.eleven_voices if v[0] == selected_voice_name), None)
+                    if voice_id:
+                        temp_mp3 = self.eleven_manager.generate_speech(self.last_topic_response[:1000], voice_id)
+                        if temp_mp3:
+                            self.status_label.configure(text="Ses oynatılıyor (ElevenLabs)...")
+                            self._play_audio(temp_mp3)
+                            return
+                
+                # --- STANDART OPENAI TTS ---
+                self.status_label.configure(text="Ses hazırlanıyor (OpenAI)...")
+                # Karakter sesini belirle (Eğer seçilen bir karakter varsa)
+                sub_option = self.sub_option_combo.get()
+                character_voice = self.character_voices.get(sub_option)
+                
+                # Eğer karakter sesi varsa onu kullan, yoksa ayarlardaki sesi kullan
+                selected_voice = character_voice if character_voice else self.tts_voices.get(self.tts_voice_combo.get(), "nova")
+                
                 client = OpenAI(api_key=self.api_key)
                 response = client.audio.speech.create(
                     model="tts-1",
@@ -1546,8 +1608,10 @@ class App(ctk.CTk):
                 )
                 temp_file = f"temp_topic_tts_{int(time.time())}.mp3"
                 response.stream_to_file(temp_file)
+                self.status_label.configure(text="Ses oynatılıyor...")
                 self._play_audio(temp_file)
             except Exception as e:
+                self.status_label.configure(text=f"Ses Hatası: {e}")
                 print(f"Topic TTS Error: {e}")
                 
         threading.Thread(target=tts_worker, daemon=True).start()
@@ -1823,6 +1887,17 @@ class App(ctk.CTk):
 
     def _language_tts_worker(self):
         try:
+            # --- ELEVENLABS SES KLONLAMA KONTROLÜ ---
+            if self.eleven_enable_var.get() and self.eleven_manager:
+                selected_voice_name = self.eleven_voice_combo.get()
+                voice_id = next((v[1] for v in self.eleven_voices if v[0] == selected_voice_name), None)
+                if voice_id:
+                    temp_mp3 = self.eleven_manager.generate_speech(self.language_analysis_result[:1000], voice_id)
+                    if temp_mp3:
+                        self._play_audio(temp_mp3)
+                    return
+
+            # --- STANDART OPENAI TTS ---
             if not self.api_key:
                 self.after(0, lambda: messagebox.showerror("Hata", "OpenAI API anahtarı bulunamadı (TTS için gereklidir)."))
                 return
@@ -2178,16 +2253,55 @@ class App(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Hata", f"Docx kaydı başarısız: {e}")
 
+    # --- ELEVENLABS SES KLONLAMA YARDIMCI METODLAR ---
+    def _refresh_eleven_voices(self):
+        """ElevenLabs üzerinden ses listesini çeker."""
+        # Giriş alanından güncel anahtarı al
+        current_api_key = self.eleven_api_entry.get().strip()
+        
+        if not current_api_key:
+            messagebox.showwarning("Uyarı", "Lütfen önce ElevenLabs API anahtarınızı girin.")
+            return
+
+        def refresh_worker():
+            try:
+                self.after(0, lambda: self.status_label.configure(text="ElevenLabs sesleri çekiliyor..."))
+                
+                if self.eleven_manager:
+                    self.eleven_manager.update_key(current_api_key)
+                    self.eleven_voices = self.eleven_manager.get_voices()
+                    
+                    if self.eleven_voices:
+                        names = [v[0] for v in self.eleven_voices]
+                        self.after(0, lambda: self.eleven_voice_combo.configure(values=names))
+                        self.after(0, lambda: self.eleven_voice_combo.set(names[0]))
+                        self.after(0, lambda: self.status_label.configure(text=f"ElevenLabs: {len(names)} ses yüklendi."))
+                    else:
+                        self.after(0, lambda: self.eleven_voice_combo.configure(values=["Ses Bulunamadı"]))
+                        self.after(0, lambda: self.eleven_voice_combo.set("Ses Bulunamadı"))
+                        self.after(0, lambda: messagebox.showinfo("Bilgi", "Hesabınızda ses bulunamadı. Lütfen ElevenLabs sitesinden ses ekleyin."))
+                else:
+                    self.after(0, lambda: messagebox.showerror("Hata", "ElevenLabs modülü yüklenemedi."))
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("API Hatası", f"ElevenLabs bağlantı hatası: {e}"))
+                self.after(0, lambda: self.status_label.configure(text="Bağlantı Başarısız."))
+
+        threading.Thread(target=refresh_worker, daemon=True).start()
+
     # --- SİSTEM AYARLARI VE ANAHTAR YÖNETİMİ ---
     def save_api_keys(self):
         """API anahtarlarını .env dosyasına kalıcı ve güvenli olarak kaydeder."""
         openai_key = self.api_entry.get().strip()
         gemini_key = self.gemini_api_entry.get().strip()
+        eleven_key = self.eleven_api_entry.get().strip()
         
         try:
             env_path = os.path.join(os.getcwd(), ".env")
             set_key(env_path, "OPENAI_API_KEY", openai_key)
             set_key(env_path, "GEMINI_API_KEY", gemini_key)
+            set_key(env_path, "ELEVENLABS_API_KEY", eleven_key)
+            set_key(env_path, "ELEVENLABS_ENABLE", str(self.eleven_enable_var.get()))
+            set_key(env_path, "ELEVENLABS_VOICE", self.eleven_voice_combo.get())
             set_key(env_path, "TTS_VOICE", self.tts_voice_combo.get())
             set_key(env_path, "AI_PERSONA", self.persona_combo.get())
         except Exception as e:
@@ -2207,6 +2321,11 @@ class App(ctk.CTk):
             
         self.api_key = openai_key
         self.gemini_api_key = gemini_key
+        self.eleven_api_key = eleven_key
+        
+        if self.eleven_manager:
+            self.eleven_manager.update_key(eleven_key)
+            
         messagebox.showinfo("Başarılı", "API Anahtarları .env dosyasına güvenle kaydedildi.")
 
     def load_api_key(self):
@@ -2214,8 +2333,17 @@ class App(ctk.CTk):
         try:
             self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
             self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+            self.eleven_api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+            
+            saved_eleven_enable = os.getenv("ELEVENLABS_ENABLE", "False") == "True"
+            saved_eleven_voice = os.getenv("ELEVENLABS_VOICE", "")
+            
+            if hasattr(self, 'eleven_enable_var'):
+                self.eleven_enable_var.set(saved_eleven_enable)
+            if hasattr(self, 'eleven_voice_combo') and saved_eleven_voice:
+                self.eleven_voice_combo.set(saved_eleven_voice)
 
-            if not self.api_key or not self.gemini_api_key:
+            if not self.api_key or not self.gemini_api_key or not self.eleven_api_key:
                 if os.path.exists("config.json"):
                     with open("config.json", "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -2223,6 +2351,8 @@ class App(ctk.CTk):
                             self.api_key = data.get("openai_api_key", "").strip()
                         if not self.gemini_api_key:
                             self.gemini_api_key = data.get("gemini_api_key", "").strip()
+                        if not self.eleven_api_key:
+                            self.eleven_api_key = data.get("elevenlabs_api_key", "").strip()
             
             # TTS Ses Tercihini yükle
             saved_voice = os.getenv("TTS_VOICE", "Profesyonel Erkek (Onyx)")
@@ -2241,6 +2371,13 @@ class App(ctk.CTk):
             if self.gemini_api_key:
                 self.gemini_api_entry.delete(0, "end")
                 self.gemini_api_entry.insert(0, self.gemini_api_key)
+            
+            if self.eleven_api_key:
+                if hasattr(self, 'eleven_api_entry'):
+                    self.eleven_api_entry.delete(0, "end")
+                    self.eleven_api_entry.insert(0, self.eleven_api_key)
+                if self.eleven_manager:
+                    self.eleven_manager.update_key(self.eleven_api_key)
                         
         except Exception as e:
             print(f"Konfigürasyon yükleme hatası: {e}")
