@@ -1425,6 +1425,9 @@ class App(ctk.CTk):
         is_start = False
         if not user_input:
             is_start = True
+            # Sohbet alanını temizle ve başlangıç mesajını göster
+            self.topic_textbox.delete("1.0", "end")
+            self.topic_textbox.insert("end", f"--- {sub_option if sub_option != '-' else scenario} ile Bağlantı Kuruluyor... ---\n")
         
         self.start_topic_btn.configure(state="disabled", text="...")
         self.topic_ask_btn.configure(state="disabled")
@@ -1464,10 +1467,9 @@ class App(ctk.CTk):
                     system_msg += "Öğrencinin fikrine nazikçe ama zekice karşı çık, antitez sun. "
                 elif "Mülakat" in scenario:
                     system_msg += "Mülakat yapıyorsun. Zor teknik sorular sor, cevabı puanla. "
-            else:
                 system_msg += "Cana yakın ve öğretici bir dille yardımcı ol."
 
-            prompt = self._get_topic_prompt(topic, user_input, history_context)
+            prompt = self._get_topic_prompt(topic, user_input, scenario, sub_option, history_context)
 
             if self.gemini_api_key:
                 client = GeminiClient(api_key=self.gemini_api_key)
@@ -1503,15 +1505,23 @@ class App(ctk.CTk):
             self.after(0, lambda: self.topic_ask_btn.configure(state="normal"))
             self.after(0, lambda: self.topic_chat_entry.delete(0, "end"))
 
-    def _get_topic_prompt(self, topic, user_input, history=""):
-        prompt = f"Konu: {topic}\n"
+    def _get_topic_prompt(self, topic, user_input, scenario, sub_option, history=""):
+        prompt = f"Konu: {topic}\nSenaryo: {scenario}\n"
+        if sub_option and sub_option != "-":
+            prompt += f"Karakterin: {sub_option}\n"
+            
         if history:
             prompt += f"--- Sohbet Geçmişi ---\n{history}\n"
         
         if not user_input:
-            prompt += f"{topic} hakkında bana ilham verici bir başlangıç bilgisi veya fikir ver."
+            if sub_option and sub_option != "-":
+                prompt += f"GÖREV: Lütfen kendini '{sub_option}' olarak tanıtarak sohbete başla. " \
+                          f"Karakterinin ismini ilk cümlede mutlaka kullan (Örn: 'Merhaba, ben {sub_option}...'). " \
+                          f"Kendi tarzınla kullanıcıyı selamla ve '{scenario}' senaryosu hakkında kısa bir giriş yapıp ilk sorunla sohbeti başlat."
+            else:
+                prompt += f"{topic} ve {scenario} hakkında bana ilham verici bir başlangıç bilgisi veya fikir ver."
         else:
-            prompt += f"Öğrencinin Yeni Mesajı: {user_input}"
+            prompt += f"Öğrenci: {user_input}"
         return prompt
 
     def _speak_topic_last_response(self):
