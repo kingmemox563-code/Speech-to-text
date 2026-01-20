@@ -28,6 +28,9 @@ import noisereduce as nr
 import pygame
 import shutil
 import pywinstyles # Modern Windows pencere efektleri için
+from PIL import Image
+import requests
+import io
 
 # .env dosyasını yükle (API anahtarları için)
 load_dotenv()
@@ -41,12 +44,17 @@ try:
     from report_generator import ReportGenerator
     from visualizer import AudioVisualizer
     from elevenlabs_manager import ElevenLabsManager
+    from stats_manager import StatsManager
+    from sound_manager import SoundManager
 except ImportError:
     # Eğer bu dosyalar mevcut değilse uygulama hatasız çalışmaya devam eder
     AnalyticsGenerator = None
     ReportGenerator = None
     AudioVisualizer = None
     ElevenLabsManager = None
+    ElevenLabsManager = None
+    from stats_manager import StatsManager # Always try to import local one
+    from sound_manager import SoundManager
 
 class SentimentTimeline(ctk.CTkFrame):
     """Analiz sekmesi için etkileşimli duygu zaman çizelgesi."""
@@ -212,6 +220,13 @@ class App(ctk.CTk):
             self.eleven_manager = None
         self.eleven_voices = [] # [[name, id], ...]
 
+        # İstatistik Yöneticisi
+        # İstatistik Yöneticisi
+        self.stats_manager = StatsManager()
+        
+        # Sound Manager Başlat
+        self.sound_manager = SoundManager()
+
         # --- KARAKTER SES VE STİL EŞLEŞTİRMELERİ ---
         self.character_voices = {
             "Fatih Sultan Mehmet": "onyx",
@@ -285,6 +300,12 @@ class App(ctk.CTk):
                 "🤔 Düşünce Deneyi": ["Mağara Alegorisi (Platon)", "Gemisi (Theseus)"],
                 "🧠 Filozofla Sohbet": ["Sokrates", "Nietzsche", "Kant", "Aristoteles", "Mevlana"],
                 "😈 Şeytanın Avukatı": []
+            },
+            "RPG Oyunu": {
+                "🏰 Tarihsel Macera": ["İstanbul'un Fethi'nde Casus", "Kurtuluş Savaşı'nda Haberci", "Orta Çağ Krallığı"],
+                "🚀 Uzay Kolonisi": ["Mars'ta Hayatta Kalma", "Yabancı Gezegen Keşfi"],
+                "🕵️ Detektiflik Bürosu": ["Gizemli Cinayet", "Siber Suçlar"],
+                "🧟 Kıyamet Sonrası": ["Zombi İstilası", "Nükleer Kış"]
             }
         }
 
@@ -294,6 +315,12 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("dark") # Koyu tema varsayılan
         self.protocol("WM_DELETE_WINDOW", self.on_app_closing)
         
+        # Auto-VAD (Silence Detection) Ayarları
+        self.silence_threshold = 0.01 # Sessizlik eşiği (RMS)
+        self.silence_start_time = None
+        self.auto_vad_enabled = False # Kullanıcının isteği üzerine varsayılan olarak KAPALI
+        self.last_rms = 0
+
         # Arayüzü oluştur ve kayıtlı anahtarları yükle
         self.setup_ui()
         self.load_api_key()
@@ -309,13 +336,6 @@ class App(ctk.CTk):
             pywinstyles.set_opacity(self.navigation_frame, value=0.9)
         except Exception as pe:
             print(f"Pencere stili hatası: {pe}")
-        
-        
-        # Auto-VAD (Silence Detection) Ayarları
-        self.silence_threshold = 0.01 # Sessizlik eşiği (RMS)
-        self.silence_start_time = None
-        self.auto_vad_enabled = False # Kullanıcının isteği üzerine varsayılan olarak KAPALI
-        self.last_rms = 0
         
         # --- Başlangıç Temizliği ---
         self.cleanup_temp_files()
@@ -413,7 +433,8 @@ class App(ctk.CTk):
         
         # 1. DASHBOARD PANELİ (Ana Kayıt Ekranı)
         self.home_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.home_frame.grid_columnconfigure(0, weight=1)
+        self.home_frame.grid_columnconfigure(0, weight=3) # Transkript ve Kontroller
+        self.home_frame.grid_columnconfigure(1, weight=1) # İstatistikler
         self.home_frame.grid_rowconfigure(2, weight=1)
 
         # 1. Ses Görselleştirici (En Üst)
@@ -452,6 +473,35 @@ class App(ctk.CTk):
         self.file_btn = ctk.CTkButton(self.dashboard_controls, text="SES DOSYASI YÜKLE", fg_color="#34495e", font=("Arial", 14, "bold"),
                                      height=50, command=self.process_audio_file)
         self.file_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+
+        # 3. İstatistik Paneli (Sağ Taraf)
+        self.stats_panel = ctk.CTkScrollableFrame(self.home_frame, label_text="Öğrenme İstatistikleri", corner_radius=15, border_width=2, border_color="#ff007f")
+        self.stats_panel.grid(row=0, column=1, rowspan=4, padx=(10, 20), pady=10, sticky="nsew")
+        
+        # İstatistik Etiketleri
+        self.stat_labels = {}
+        stats_info = [
+            ("Oturum Sayısı", "total_sessions", "📁"),
+            ("Toplam Kelime", "total_words", "✍️"),
+            ("Çalışma Süresi (dk)", "learning_time_minutes", "⏱️"),
+            ("Tamamlanan Quiz", "total_quizzes", "📝"),
+            ("Ortalamas Quiz Skoru", "average_quiz_score", "🎯")
+        ]
+        
+        for name, key, icon in stats_info:
+            frame = ctk.CTkFrame(self.stats_panel, fg_color="transparent")
+            frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(frame, text=f"{icon} {name}:", font=("Inter", 12, "bold")).pack(side="left", padx=5)
+            lbl = ctk.CTkLabel(frame, text="0", font=("Inter", 12), text_color="#00adb5")
+            lbl.pack(side="right", padx=5)
+            self.stat_labels[key] = lbl
+        
+        # Rozetler / Başarılar Alanı
+        ctk.CTkLabel(self.stats_panel, text="🏆 Başarılar", font=("Inter", 14, "bold"), text_color="#ffea00").pack(pady=(20, 10))
+        self.achievement_frame = ctk.CTkFrame(self.stats_panel, fg_color="transparent")
+        self.achievement_frame.pack(fill="x")
+        
+        self.update_stats_ui()
 
         # 2. ANALİZ PANELİ (Detaylı AI Geri Bildirimi)
         self.analysis_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -562,7 +612,7 @@ class App(ctk.CTk):
         self.coach_left_panel = ctk.CTkFrame(self.language_frame, fg_color="transparent")
         self.coach_left_panel.grid(row=1, column=0, padx=(20, 10), pady=10, sticky="nsew")
         self.coach_left_panel.grid_columnconfigure(0, weight=1)
-        self.coach_left_panel.grid_rowconfigure(2, weight=1)
+        self.coach_left_panel.grid_rowconfigure(1, weight=1)
 
         # Dil Ayarları Üst Bar (Sol Panel İçinde)
         self.lang_coach_settings = ctk.CTkFrame(self.coach_left_panel)
@@ -585,7 +635,7 @@ class App(ctk.CTk):
 
         # Dil Koçu Geri Bildirim Alanı
         self.language_textbox = ctk.CTkTextbox(self.coach_left_panel, font=("Inter", 14), corner_radius=15, border_width=2, border_color="#ff007f")
-        self.language_textbox.grid(row=2, column=0, pady=10, sticky="nsew")
+        self.language_textbox.grid(row=1, column=0, pady=10, sticky="nsew")
         self.language_textbox.insert("1.0", "--- AI DİL KOÇU HAZIR ---\n")
 
         # Aksiyon Butonları (Sol Panel Altı)
@@ -605,15 +655,23 @@ class App(ctk.CTk):
                                           height=40, command=self.save_coach_pdf)
         self.coach_pdf_btn.grid(row=0, column=2, padx=2, sticky="ew")
 
-        self.speak_coach_btn = ctk.CTkButton(self.coach_actions, text="🔊 DÜZELTMELERİ SESLENDİR", fg_color="#ff5722", font=("Inter", 12, "bold"),
+        self.word_bank_btn = ctk.CTkButton(self.coach_actions, text="📔 KELİME DEFTERİ", fg_color="#9b59b6", font=("Inter", 12, "bold"),
+                                          height=40, command=self.show_word_bank)
+        self.word_bank_btn.grid(row=1, column=0, pady=(5, 0), sticky="ew")
+
+        self.pronounce_test_btn = ctk.CTkButton(self.coach_actions, text="🎯 TELAFFUZ TESTİ", fg_color="#2ecc71", font=("Inter", 12, "bold"),
+                                               height=40, command=self.start_pronunciation_test)
+        self.pronounce_test_btn.grid(row=1, column=1, pady=(5, 0), sticky="ew")
+
+        self.speak_coach_btn = ctk.CTkButton(self.coach_actions, text="🔊 SESLENDİR", fg_color="#ff5722", font=("Inter", 12, "bold"),
                                             height=40, command=self._speak_language_response)
-        self.speak_coach_btn.grid(row=1, column=0, columnspan=3, pady=(5, 0), sticky="ew")
+        self.speak_coach_btn.grid(row=1, column=2, pady=(5, 0), sticky="ew")
 
         # --- SAĞ PANEL: KONU BAZLI AI SOHBET ---
         self.topic_right_panel = ctk.CTkFrame(self.language_frame, fg_color="transparent")
         self.topic_right_panel.grid(row=1, column=1, padx=(10, 20), pady=10, sticky="nsew")
         self.topic_right_panel.grid_columnconfigure(0, weight=1)
-        self.topic_right_panel.grid_rowconfigure(2, weight=1)
+        self.topic_right_panel.grid_rowconfigure(1, weight=1)
 
         # Konu Seçimi Üst Bar
         self.topic_settings = ctk.CTkFrame(self.topic_right_panel)
@@ -635,32 +693,60 @@ class App(ctk.CTk):
         # şimdilik varsayılan olarak gösterip boş bırakalım veya kodla yönetelim.
         self.sub_option_combo.pack(side="left", padx=2)
 
+        self.magic_wand_btn = ctk.CTkButton(self.topic_settings, text="🪄", fg_color="#ff007f", font=("Inter", 16),
+                                           command=self.create_custom_scenario, width=40)
+        self.magic_wand_btn.pack(side="left", padx=5)
+
         # İlk Başlatma: Kodlama için senaryoları yükle
         self._on_topic_change("Kodlama")
 
         self.start_topic_btn = ctk.CTkButton(self.topic_settings, text="BAŞLAT", fg_color="#4285f4", font=("Inter", 12, "bold"),
-                                            command=self.run_topic_ai_chat, width=80)
+                                            command=self.run_topic_ai_chat, width=70)
         self.start_topic_btn.pack(side="left", padx=5)
-
-        self.start_quiz_btn = ctk.CTkButton(self.topic_settings, text="📝 QUIZ", fg_color="#10a37f", font=("Inter", 12, "bold"),
-                                           command=self.run_topic_quiz, width=80)
-        self.start_quiz_btn.pack(side="left", padx=5)
-
-        self.flashcard_btn = ctk.CTkButton(self.topic_settings, text="🎴 KARTLAR", fg_color="#ffea00", text_color="black", font=("Inter", 12, "bold"),
-                                          command=self.generate_flashcards, width=90)
-        self.flashcard_btn.pack(side="left", padx=5)
-
-        self.topic_pdf_btn = ctk.CTkButton(self.topic_settings, text="📄 PDF", fg_color="#e67e22", font=("Inter", 12, "bold"),
-                                          command=self.save_topic_pdf, width=70)
-        self.topic_pdf_btn.pack(side="left", padx=5)
-
-        self.auto_tts_topic_switch = ctk.CTkSwitch(self.topic_settings, text="OTOTTS", variable=self.auto_tts_topic_var, 
-                                                 font=("Inter", 10), width=60)
-        self.auto_tts_topic_switch.pack(side="right", padx=10)
 
         # Konu Sohbet Alanı
         self.topic_textbox = ctk.CTkTextbox(self.topic_right_panel, font=("Consolas", 14), corner_radius=15, border_width=2, border_color="#4285f4")
-        self.topic_textbox.grid(row=2, column=0, pady=10, sticky="nsew")
+        self.topic_textbox.grid(row=1, column=0, pady=5, sticky="nsew")
+        
+        # Görsel Alanı (DALL-E) - Metin kutusunun altında (Simetri için en iyisi bu)
+        self.topic_image_frame = ctk.CTkFrame(self.topic_right_panel, height=350, fg_color="transparent")
+        self.topic_image_frame.grid(row=2, column=0, pady=5, sticky="ew")
+        
+        self.topic_image_label = ctk.CTkLabel(self.topic_image_frame, text="", text_color="gray50")
+        self.topic_image_label.pack(expand=True, fill="both")
+
+        self.start_quiz_btn = ctk.CTkButton(self.topic_settings, text="📝 QUIZ", fg_color="#10a37f", font=("Inter", 12, "bold"),
+                                           command=self.run_topic_quiz, width=50)
+        self.start_quiz_btn.pack(side="left", padx=5)
+
+        self.flashcard_btn = ctk.CTkButton(self.topic_settings, text="🎴 KARTLAR", fg_color="#ffea00", text_color="black", font=("Inter", 12, "bold"),
+                                          command=self.generate_flashcards, width=70)
+        self.flashcard_btn.pack(side="left", padx=5)
+
+        self.topic_pdf_btn = ctk.CTkButton(self.topic_settings, text="📄 PDF", fg_color="#e67e22", font=("Inter", 12, "bold"),
+                                          command=self.save_topic_pdf, width=50)
+        self.topic_pdf_btn.pack(side="left", padx=5)
+
+        self.image_gen_btn = ctk.CTkButton(self.topic_settings, text="🖼️", fg_color="#8e44ad", font=("Inter", 16),
+                                          command=self.manual_image_generation, width=40)
+        self.image_gen_btn.pack(side="left", padx=5)
+
+        self.topic_rag_btn = ctk.CTkButton(self.topic_settings, text="📂 YÜKLE", fg_color="#3498db", font=("Inter", 12, "bold"),
+                                          command=self.upload_topic_notes, width=70)
+        self.topic_rag_btn.pack(side="left", padx=5)
+
+
+        # RPG Envanter / Durum Paneli
+        self.inv_frame = ctk.CTkFrame(self.topic_right_panel, fg_color="transparent")
+        self.inv_frame.grid(row=2, column=0, pady=2, sticky="ne")
+        
+        # Envanter Label'ları
+        self.hp_label = ctk.CTkLabel(self.inv_frame, text="", text_color="#e74c3c", font=("Impact", 18))
+        self.hp_label.pack(side="top", anchor="e")
+        
+        self.inv_label = ctk.CTkLabel(self.inv_frame, text="", text_color="#f1c40f", font=("Inter", 12))
+        self.inv_label.pack(side="top", anchor="e")
+
         self.topic_textbox.insert("1.0", "--- KONU BAZLI EĞİTİM ASİSTANI ---\nLütfen bir konu seçip 'SOHBETİ BAŞLAT' butonuna basın.\n")
 
         # Konu Chat Giriş Alanı
@@ -681,11 +767,20 @@ class App(ctk.CTk):
                                 command=lambda o=opt: self.submit_quiz_answer(o))
             btn.pack(side="left", padx=2)
             self.quiz_options[opt] = btn
+            
+        # RPG Seçenekleri Frame'i
+        self.rpg_option_frame = ctk.CTkFrame(self.topic_chat_input_frame, fg_color="transparent")
+        self.rpg_buttons = []
         
         self.topic_speak_btn = ctk.CTkButton(self.topic_chat_input_frame, text="🔊", width=35, height=35, fg_color="transparent",
                                              text_color="#10a37f", font=("Arial", 16), command=self._speak_topic_last_response)
         # Hoparlör butonunu GÖNDER'in yanına (soluna) ekleyelim
         self.topic_speak_btn.pack(side="right", padx=(0, 5), pady=10)
+
+        # OTOTTS Anahtarı (GÖNDER'in yanına eklendi)
+        self.auto_tts_topic_switch = ctk.CTkSwitch(self.topic_chat_input_frame, text="OTOTTS", variable=self.auto_tts_topic_var, 
+                                                 font=("Inter", 11, "bold"), width=80)
+        self.auto_tts_topic_switch.pack(side="right", padx=(5, 5), pady=10)
 
         self.topic_ask_btn = ctk.CTkButton(self.topic_chat_input_frame, text="GÖNDER", width=80, height=35, fg_color="#4285f4", command=self.run_topic_ai_chat)
         self.topic_ask_btn.pack(side="right", padx=(5, 10), pady=10)
@@ -785,6 +880,11 @@ class App(ctk.CTk):
         self.auto_vad_var = ctk.BooleanVar(value=False)
         ctk.CTkSwitch(self.model_group, text="Otomatik Sessizlik Algılama (Auto-VAD)", variable=self.auto_vad_var, command=self._toggle_auto_vad).pack(pady=5)
 
+        ctk.CTkLabel(self.model_group, text="VAD Hassasiyeti (Daha düşük = Daha hassas):", font=("Arial", 11)).pack(pady=(5, 0))
+        self.vad_threshold_slider = ctk.CTkSlider(self.model_group, from_=0.001, to=0.1, number_of_steps=100, command=self._update_vad_threshold)
+        self.vad_threshold_slider.set(self.silence_threshold)
+        self.vad_threshold_slider.pack(pady=5, padx=20)
+
         # ElevenLabs Ses Klonlama Grubu
         self.eleven_group = ctk.CTkFrame(self.settings_frame)
         self.eleven_group.pack(padx=40, pady=10, fill="x")
@@ -883,6 +983,40 @@ class App(ctk.CTk):
                 "OYNAT ▶️"
             ))
 
+    def update_stats_ui(self):
+        """İstatistikleri arayüzde günceller."""
+        if not hasattr(self, 'stats_manager') or not hasattr(self, 'stat_labels'):
+            return
+            
+        stats = self.stats_manager.get_summary()
+        for key, lbl in self.stat_labels.items():
+            val = stats.get(key, 0)
+            if key == "average_quiz_score":
+                lbl.configure(text=f"%{val}")
+            else:
+                lbl.configure(text=str(val))
+        
+        # Başarıları (Achievements) güncelle
+        for widget in self.achievement_frame.winfo_children():
+            widget.destroy()
+            
+        if stats["total_sessions"] >= 5:
+            ctk.CTkLabel(self.achievement_frame, text="🥉 Bronz Öğrenci", text_color="#cd7f32").pack()
+        if stats["total_quizzes"] >= 1:
+            ctk.CTkLabel(self.achievement_frame, text="🎓 Bilgi Avcısı", text_color="#00adb5").pack()
+
+    def _toggle_auto_vad(self):
+        """Auto-VAD özelliğini açar/kapatır."""
+        self.auto_vad_enabled = self.auto_vad_var.get()
+        status = "Açık" if self.auto_vad_enabled else "Kapalı"
+        print(f"Auto-VAD: {status}")
+
+    def _update_vad_threshold(self, value):
+        """VAD hassasiyetini günceller."""
+        self.silence_threshold = float(value)
+        # print(f"VAD Eşiği Güncellendi: {self.silence_threshold}")
+
+
     def _on_history_click(self, event):
         """Geçmiş tablosuna tıklandığında kaydı oynatır."""
         selected = self.history_table.selection()
@@ -924,12 +1058,16 @@ class App(ctk.CTk):
                 voice_id = next((v[1] for v in self.eleven_voices if v[0] == selected_voice_name), None)
                 
                 if voice_id:
-                    self.animator.start_loading("ElevenLabs Ses Sentezleniyor")
-                    temp_mp3 = self.eleven_manager.generate_speech(self.last_analysis[:1000], voice_id)
-                    self.animator.stop("Ses Sentezlendi")
-                    if temp_mp3:
-                        self._play_audio(temp_mp3)
-                    return
+                    try:
+                        self.animator.start_loading("ElevenLabs Ses Sentezleniyor")
+                        temp_mp3 = self.eleven_manager.generate_speech(self.last_analysis[:1000], voice_id)
+                        self.animator.stop("Ses Sentezlendi")
+                        if temp_mp3:
+                            self._play_audio(temp_mp3)
+                            return
+                    except Exception as e:
+                        print(f"ElevenLabs Hatası (Kotanız dolmuş olabilir, OpenAI'a geçiliyor): {e}")
+                        # Devam et ve OpenAI TTS'i kullan
 
             # --- STANDART OPENAI TTS ---
             if not self.api_key:
@@ -955,7 +1093,8 @@ class App(ctk.CTk):
             response.stream_to_file(temp_tts)
             self._play_audio(temp_tts)
         except Exception as e:
-            self.after(0, lambda e=e: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {err}"))
             if hasattr(self, 'animator'): self.animator.stop("TTS Hatası")
 
     def _send_quick_chat(self, prompt):
@@ -1044,14 +1183,14 @@ class App(ctk.CTk):
                             self.last_rms = rms
                             
                             # --- Auto-VAD İşlemi (Eğer kullanıcı Ayarlardan açmışsa) ---
-                            if self.auto_vad_enabled and (time.time() - self.recording_start_time > 5.0): # 5 sn'den sonra başlasın
+                            if self.auto_vad_enabled and (time.time() - self.recording_start_time > 2.0): # 2 sn'den sonra başlasın
                                 if rms < self.silence_threshold:
                                     if self.silence_start_time is None:
                                         self.silence_start_time = time.time()
                                     else:
                                         silent_duration = time.time() - self.silence_start_time
-                                        if silent_duration > 3.0: # 3 saniye sessizlik
-                                            print("Auto-VAD: Sessizlik algılandı, kayıt durduruluyor.")
+                                        if silent_duration > 2.0: # 2 saniye sessizlik yeterli
+                                            print(f"Auto-VAD: Sessizlik algılandı ({silent_duration:.1f}s), kayıt durduruluyor.")
                                             self.after(0, self.toggle_recording)
                                             break
                                 else:
@@ -1061,7 +1200,8 @@ class App(ctk.CTk):
                     time.sleep(0.05) # İşlemciyi yormadan kuyruğu boşalt
         except Exception as e:
             self.is_recording = False
-            self.after(0, lambda e=e: messagebox.showerror("Donanım Hatası", f"Mikrofon hatası: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("Donanım Hatası", f"Mikrofon hatası: {err}"))
             return
         
         # --- SES İŞLEME: NORMALİZASYON VE GÜRÜLTÜ AZALTMA ---
@@ -1167,12 +1307,21 @@ class App(ctk.CTk):
                 self.after(0, lambda: self.topic_chat_entry.delete(0, "end"))
                 self.after(0, lambda: self.topic_chat_entry.insert(0, full_text))
                 self.after(0, lambda: self.run_topic_ai_chat())
+            elif self.active_recording_source == "pronunciation":
+                self.after(0, lambda: self._compare_pronunciation(full_text))
                 
             # Analiz sekmesi her zaman güncellenebilir (opsiyonel, bağımsızlık için kaldırılabilir)
             self.after(0, lambda: self.analysis_textbox.insert("end", f"\n[TRANSKRIPT]:\n{full_text}\n"))
+            
+            # İstatistikleri güncelle
+            words = len(full_text.split())
+            self.stats_manager.add_session(words=words, minutes=0.5) # Yaklaşık 0.5 dk varsayılan çalışma
+            self.update_stats_ui()
+            
             self.animator.stop("İşlem tamamlandı.")
         except Exception as e:
-            self.after(0, lambda e=e: messagebox.showerror("Hata", f"Transkripsiyon Hatası: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("Hata", f"Transkripsiyon Hatası: {err}"))
 
     def process_audio_file(self):
         """Bilgisayardan bir ses dosyası seçilmesini sağlar."""
@@ -1304,9 +1453,10 @@ class App(ctk.CTk):
                 return
 
             self.last_analysis = answer # Seslendirilebilmesi için son cevabı kaydet
-            self.after(0, lambda: self._add_chat_to_ui(question, answer))
+            self.after(0, lambda q=question, a=answer: self._add_chat_to_ui(q, a))
         except Exception as e:
-            self.after(0, lambda e=e: messagebox.showerror("Chat Hatası", f"Hata: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("Chat Hatası", f"Hata: {err}"))
         finally:
             self.after(0, lambda: self.ask_btn.configure(state="normal", text="SOR"))
             self.after(0, lambda: self.chat_entry.delete(0, "end"))
@@ -1428,10 +1578,10 @@ class App(ctk.CTk):
                 return
 
             self.language_analysis_result = result
-            self.after(0, lambda: self._update_language_ui(result))
-            self.animator.stop("Dil analizi tamamlandı.")
+            self.after(0, lambda r=result: self._update_language_ui(r))
         except Exception as e:
-            self.after(0, lambda e=e: messagebox.showerror("Dil Koçu Hatası", f"Hata: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("Dil Koçu Hatası", f"Hata: {err}"))
         finally:
             self.after(0, lambda: self.run_coach_btn.configure(state="normal", text="DİL ANALİZİ BAŞLAT"))
 
@@ -1460,6 +1610,227 @@ class App(ctk.CTk):
             else:
                 self.sub_option_combo.configure(values=[], state="disabled")
                 self.sub_option_combo.set("-")
+        
+        # Ambiyans Sesini Güncelle
+        if hasattr(self, 'sound_manager'):
+            self.sound_manager.play_ambience(choice)
+            
+        # Otomatik Görsel Üretimini Tetikle
+        self.manual_image_generation()
+
+    def create_custom_scenario(self):
+        """Kullanıcıdan bir ilgi alanı alıp AI'ya özel senaryo ürettirir."""
+        dialog = ctk.CTkInputDialog(text="Hangi konuda bir senaryo oluşturmak istersin?\n(Örn: Uzay Mimarisi, Robotik Cerrahi, vb.)", title="Akıllı Senaryo Jeneratörü")
+        interest = dialog.get_input()
+        
+        if interest:
+            if not self.api_key and not self.gemini_api_key:
+                messagebox.showerror("Hata", "Lütfen önce 'Ayarlar' sekmesinden bir API anahtarı kaydedin.")
+                return
+            
+            self.magic_wand_btn.configure(state="disabled", text="✨")
+            threading.Thread(target=self._custom_scenario_logic, args=(interest,), daemon=True).start()
+
+    def _custom_scenario_logic(self, interest):
+        """AI'dan ilgi alanına uygun senaryo ve karakterler üretir."""
+        try:
+            print(f"[*] Özel senaryo üretiliyor: {interest}")
+            prompt = f"Kullanıcı '{interest}' konusunda bir dil eğitimi/RPG senaryosu istiyor. " \
+                     f"Lütfen bir senaryo adı, kısa bir açıklama ve 3 adet farklı karakter/mod adı üret. " \
+                     f"Format: SADECE JSON döndür. Örnek: {{\"scenario_name\": \"...\", \"description\": \"...\", \"characters\": [\"...\", \"...\", \"...\"]}} " \
+                     f"Dili Türkçe olsun. JSON tırnakları için ÇİFT TIRNAK kullan."
+            
+            system_msg = "Sen yaratıcı bir eğitim tasarımcısısın. SADECE JSON formatında yanıt ver, başka açıklama ekleme."
+            
+            result = ""
+            used_model = "None"
+            # 1. Öncelik: Gemini
+            if self.gemini_api_key:
+                try:
+                    client = GeminiClient(api_key=self.gemini_api_key)
+                    response = client.generate_content(prompt, system_instruction=system_msg)
+                    # Eğer hata mesajı DEĞİLSE ve boş değilse sonucu al
+                    if response and not response.startswith("[V19]"):
+                        result = response
+                        used_model = "Gemini"
+                    else:
+                        print(f"Gemini Kota/Hata (Fallback): {response[:100]}...")
+                except Exception as gem_ex:
+                    print(f"Gemini Bağlantı Hatası: {gem_ex}")
+
+            # 2. Öncelik/Fallback: OpenAI
+            if not result and self.api_key:
+                try:
+                    print("[*] GPT-4o ile devam ediliyor...")
+                    client = OpenAI(api_key=self.api_key)
+                    res = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}]
+                    )
+                    result = res.choices[0].message.content
+                    used_model = "GPT-4o"
+                except Exception as gpt_ex:
+                    print(f"GPT Hatası: {gpt_ex}")
+            
+            if result:
+                import json
+                import re
+                
+                # Daha sağlam JSON ayıklama (Regex kullanarak)
+                json_match = re.search(r'\{.*\}', result, re.DOTALL)
+                if json_match:
+                    clean_json = json_match.group(0)
+                else:
+                    clean_json = result.replace("```json", "").replace("```", "").strip()
+                
+                data = json.loads(clean_json)
+                
+                s_name = data.get("scenario_name", interest)
+                s_desc = data.get("description", "")
+                chars = data.get("characters", ["Uzman", "Öğrenci", "Mentor"])
+                
+                # Mevcut verilere ekle
+                custom_topic = "Özel Senaryo"
+                if custom_topic not in self.scenarios_data:
+                    self.scenarios_data[custom_topic] = {}
+                
+                self.scenarios_data[custom_topic][s_name] = chars
+                
+                # UI Güncelle
+                self.after(0, lambda t=custom_topic, s=s_name: self._update_custom_topic_ui(t, s))
+            
+            else:
+                # Eğer hiçbir modelden sonuç alınamadıysa
+                self.after(0, lambda: messagebox.showwarning("Hata", "AI senaryo üretemedi. Lütfen API kotalarını veya bağlantınızı kontrol edin."))
+                
+        except Exception as e:
+            error_msg = str(e)
+            self.after(0, lambda m=error_msg: messagebox.showerror("Hata", f"Senaryo oluşturulamadı: {m}"))
+        finally:
+            self.after(0, lambda: self.magic_wand_btn.configure(state="normal", text="🪄"))
+
+    def _update_custom_topic_ui(self, topic, scenario):
+        """Yeni üretilen senaryoyu combo boxlara ekler."""
+        # Konu listesini güncelle
+        current_topics = list(self.scenarios_data.keys())
+        self.topic_combo.configure(values=current_topics)
+        self.topic_combo.set(topic)
+        
+        # Senaryo listesini güncelle
+        scenarios = list(self.scenarios_data[topic].keys())
+        self.scenario_combo.configure(values=scenarios)
+        self.scenario_combo.set(scenario)
+        
+        # Karakterleri yükle
+        sub_options = self.scenarios_data[topic][scenario]
+        self.sub_option_combo.configure(values=sub_options, state="normal")
+        self.sub_option_combo.set(sub_options[0])
+        
+        messagebox.showinfo("Başarılı", f"'{scenario}' senaryosu oluşturuldu!\nSohbet başlatılıyor...")
+        
+        # Seçenekleri tetikle ve sohbeti başlat
+        self._on_scenario_change(scenario)
+        self.run_topic_ai_chat()
+
+    def show_word_bank(self):
+        """Kelime Defteri penceresini açar."""
+        wb_window = ctk.CTkToplevel(self)
+        wb_window.title("Kelime Defterim")
+        wb_window.geometry("500x600")
+        wb_window.attributes("-topmost", True)
+        
+        ctk.CTkLabel(wb_window, text="📔 KAYDEDİLEN KELİMELER", font=("Inter", 18, "bold")).pack(pady=10)
+        
+        wb_textbox = ctk.CTkTextbox(wb_window, font=("Inter", 14), width=450, height=450)
+        wb_textbox.pack(pady=10, padx=10)
+        
+        # Kelimeleri Yükle
+        words = self.load_words()
+        if not words:
+            wb_textbox.insert("1.0", "Henüz kelime kaydedilmemiş.\n\nİpucu: Dil Koçu sekmesinde analiz sonucunda çıkan kelimeleri buraya ekleyebilirsiniz.")
+        else:
+            for word, data in words.items():
+                wb_textbox.insert("end", f"📌 {word.upper()}:\n   Anlam: {data.get('meaning', '-')}\n   Örnek: {data.get('example', '-')}\n{'-'*40}\n")
+        
+        wb_textbox.configure(state="disabled")
+        
+        ctk.CTkButton(wb_window, text="KAPAT", command=wb_window.destroy).pack(pady=10)
+
+    def load_words(self):
+        """JSON dosyasından kelimeleri yükler."""
+        path = "word_bank.json"
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {}
+
+    def save_word(self, word, meaning, example):
+        """Yeni bir kelimeyi JSON dosyasına kaydeder."""
+        words = self.load_words()
+        words[word.lower()] = {"meaning": meaning, "example": example, "date": str(datetime.datetime.now())}
+        with open("word_bank.json", "w", encoding="utf-8") as f:
+            json.dump(words, f, ensure_ascii=False, indent=4)
+        messagebox.showinfo("Başarılı", f"'{word}' kelime defterine eklendi!")
+
+    def start_pronunciation_test(self):
+        """AI'nın son önerisini kullanıcının tekrar etmesini ister ve karşılaştırır."""
+        if not self.last_transcript:
+            messagebox.showwarning("Uyarı", "Önce bir analiz yapmalısınız ki karşılaştıracak bir cümle olsun.")
+            return
+            
+        # Basit bir regex ile önerilen cümleyi bulmaya çalış (Daha gelişmiş olabilir)
+        # Genelde 'Öneri:' veya 'Suggestion:' sonrası cümleyi alabiliriz.
+        import re
+        suggestion = ""
+        lines = self.language_analysis_result.split("\n")
+        for line in lines:
+            if "➤" in line or "Öneri:" in line or "Suggestion:" in line:
+                suggestion = line.split(":")[-1].strip().replace("➤", "").strip()
+                break
+        
+        if not suggestion:
+            # Eğer özel bir öneri bulunamazsa tüm transkripti veya son parçayı al
+            suggestion = self.last_transcript.strip()
+
+        msg = f"Lütfen şu cümleyi yüksek sesle tekrar et:\n\n\"{suggestion}\"\n\nKayıt otomatik başlayacak."
+        if messagebox.askokcancel("Telaffuz Testi", msg):
+            self.target_test_sentence = suggestion
+            self.active_recording_source = "pronunciation"
+            self.toggle_recording(source="language") # Kaydı başlat
+
+    def _compare_pronunciation(self, user_text):
+        """Kullanıcının söylediği ile hedef cümleyi karşılaştırır."""
+        target = self.target_test_sentence.lower().strip()
+        user = user_text.lower().strip()
+        
+        # Gereksiz noktalamaları temizle
+        import string
+        target = target.translate(str.maketrans('', '', string.punctuation))
+        user = user.translate(str.maketrans('', '', string.punctuation))
+        
+        # Kelime bazlı karşılaştırma
+        target_words = target.split()
+        user_words = user.split()
+        
+        matches = 0
+        for word in user_words:
+            if word in target_words:
+                matches += 1
+                
+        score = int((matches / len(target_words)) * 100) if target_words else 0
+        
+        result_msg = f"Hedef: {self.target_test_sentence}\nSöylenen: {user_text}\n\n"
+        result_msg += f"🎯 Telaffuz Skoru: %{score}\n\n"
+        
+        if score > 90:
+            result_msg += "Mükemmel! Tıpkı bir ana dil konuşuru gibisin. 🌟"
+        elif score > 60:
+            result_msg += "Gayet iyi, birkaç kelime üzerinde durabilirsin. 👍"
+        else:
+            result_msg += "Biraz daha pratik yapmalısın. Pes etme! 💪"
+            
+        messagebox.showinfo("Telaffuz Sonucu", result_msg)
+        self.active_recording_source = "language" # Eski haline dön
 
     # --- KONU BAZLI AI SOHBET MANTIĞI ---
     def run_topic_ai_chat(self):
@@ -1476,11 +1847,144 @@ class App(ctk.CTk):
             # Sohbet alanını temizle ve başlangıç mesajını göster
             self.topic_textbox.delete("1.0", "end")
             self.topic_textbox.insert("end", f"--- {sub_option if sub_option != '-' else scenario} ile Bağlantı Kuruluyor... ---\n")
+            
+            # Yeni bir sohbet başlatılıyorsa görseli güncelle
+            threading.Thread(target=self.generate_topic_image, args=(scenario, f"{scenario} - {sub_option} context"), daemon=True).start()
         
         self.start_topic_btn.configure(state="disabled", text="...")
         self.topic_ask_btn.configure(state="disabled")
         
         threading.Thread(target=self._topic_chat_logic, args=(topic, user_input, scenario, sub_option), daemon=True).start()
+
+    def generate_topic_image(self, topic, description):
+        """DALL-E 3 kullanarak konuya uygun görsel oluşturur ve arayüze basar."""
+        if not self.api_key:
+            return
+
+        try:
+            # UI işlemleri ana thread'de yapılmalı
+            self.after(0, lambda: self.topic_image_label.configure(text="Görsel Oluşturuluyor..."))
+            
+            client = OpenAI(api_key=self.api_key)
+            
+            # Prompt'u optimize et ve güvenlik filtreleri için rafine et
+            # DALL-E'nin 'safe' politikalarına uygun bir dille betimleme yap
+            bad_words = ["vahşet", "kan", "savaş", "ölüm", "şiddet", "silah", "saldırı", "katliam", "intikam", "kılıç", "ok", "kalkan", "yaralı", "ceset"]
+            safe_description = description.lower()
+            for word in bad_words:
+                safe_description = safe_description.replace(word, "tarihi atmosfer")
+            
+            image_prompt = f"Educational and atmospheric concept art: {topic}. {safe_description}. Detailed, 4k, cinematic, oil painting style."
+            
+            # Tarihsel/Kültürel Bağlam Güçlendirme (Örn: Osmanlı/İstanbul)
+            historical_keywords = ["İstanbul'un Fethi", "Osmanlı", "Byzantine", "Ottoman", "Constantinople"]
+            if any(key.lower() in safe_description.lower() or key.lower() in topic.lower() for key in historical_keywords):
+                image_prompt = f"Historical accurate 15th century Ottoman/Byzantine atmosphere. {safe_description}. " \
+                               f"Minarets, ancient city walls, historical architecture, historical ships. " \
+                               f"Cinematic lighting, detailed, 4k, no modern elements."
+
+            if topic == "RPG Oyunu":
+                image_prompt = f"Atmospheric, immersive concept art. Scene: {safe_description}. " \
+                               f"High detail, cinematic lighting, 4k."
+                if any(key.lower() in safe_description.lower() for key in historical_keywords):
+                    image_prompt += " Ottoman Empire architecture and 15th century historical style."
+
+            try:
+                response = client.images.generate(
+                    model="dall-e-3",
+                    prompt=image_prompt[:1000],
+                    size="1792x1024",
+                    quality="standard",
+                    n=1,
+                )
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "content_policy_violation" in err_msg or "safety_system" in err_msg:
+                    # İlk deneme filtreye takıldıysa daha güvenli bir dille sessizce tekrar dene
+                    safe_image_prompt = f"Peaceful and educational concept art illustration for {topic}. Cinematic lighting, soft colors, professional concept art."
+                    try:
+                        response = client.images.generate(
+                            model="dall-e-3",
+                            prompt=safe_image_prompt,
+                            size="1792x1024",
+                            quality="standard",
+                            n=1,
+                        )
+                    except Exception as e2:
+                        raise Exception(f"Görsel üretimi güvenlik kısıtlamasına takıldı: {e2}")
+                else:
+                    raise e
+
+            image_url = response.data[0].url
+            
+            # Resmi indir
+            response = requests.get(image_url)
+            img_data = response.content
+            
+            # PIL ile aç ve CTkImage'a çevir
+            pil_image = Image.open(io.BytesIO(img_data))
+            
+            # Frame boyutuna göre oranla (Height 300 sabit - Geniş ölçek)
+            aspect_ratio = pil_image.width / pil_image.height
+            new_height = 300
+            new_width = int(new_height * aspect_ratio)
+            
+            ctk_image = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=(new_width, new_height))
+            
+            self.after(0, lambda: self.topic_image_label.configure(image=ctk_image, text=""))
+            
+        except Exception as e:
+            err_msg = str(e)
+            print(f"Görsel oluşturma hatası: {err_msg}")
+            # Güvenlik hatası ise kullanıcıyı bilgilendir
+            if "content_policy_violation" in err_msg:
+                self.after(0, lambda: self.topic_image_label.configure(text="Güvenlik Politikası Gereği Görsel Üretilemedi"))
+            else:
+                self.after(0, lambda: self.topic_image_label.configure(text="Sistem Hatası: Görsel Üretilemedi"))
+
+    def manual_image_generation(self):
+        """Kullanıcının isteğiyle görsel oluşturur."""
+        topic = self.topic_combo.get()
+        scenario = self.scenario_combo.get()
+        
+        desc = f"{topic} - {scenario}"
+        if hasattr(self, 'last_topic_response') and self.last_topic_response:
+             desc += f". Context: {self.last_topic_response[:150]}"
+        
+        threading.Thread(target=self.generate_topic_image, args=(topic, desc), daemon=True).start()
+
+    def upload_topic_notes(self):
+        """Kullanıcının yüklediği ders notlarını (PDF/TXT) okur ve bağlama ekler."""
+        file_path = filedialog.askopenfilename(filetypes=[("Belgeler", "*.pdf *.txt")])
+        if not file_path:
+            return
+
+        try:
+            content = ""
+            if file_path.lower().endswith('.pdf'):
+                # PyPDF2 veya benzeri bir kütüphane gerekebilir ama şimdilik basit text parse deneyelim
+                # Eğer yoksa hata verebilir, bu yüzden basitleştirilmiş bir yaklaşım kullanalım veya kullanıcıdan text isteyelim.
+                # Project'te PyPDF2 yoksa, pypdf import etmeyi deneyelim
+                try:
+                    import pypdf
+                    reader = pypdf.PdfReader(file_path)
+                    for page in reader.pages:
+                        content += page.extract_text() + "\n"
+                except ImportError:
+                    # Kullanıcıya bilgi ver
+                    messagebox.showinfo("Bilgi", "PDF okumak için 'pypdf' kütüphanesi gerekli. Text dosyası yüklemeyi deneyin.")
+                    return
+            else:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+            if content:
+                # İçeriği sakla
+                self.uploaded_notes_contet = content[:5000] # Çok uzun olmasın, token limiti
+                messagebox.showinfo("Başarılı", "Notlar yüklendi! Artık sorularınızı bu notlara göre sorabilirsiniz.")
+                self.topic_textbox.insert("end", f"\n[SİSTEM]: '{os.path.basename(file_path)}' içeriği bağlama eklendi.\n")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Dosya okunamadı: {e}")
 
     def _topic_chat_logic(self, topic, user_input, scenario, sub_option):
         """Arka planda bağımsız konu chat isteğini yönetir ve hafızayı kullanır."""
@@ -1515,39 +2019,96 @@ class App(ctk.CTk):
                     system_msg += "Öğrencinin fikrine nazikçe ama zekice karşı çık, antitez sun. "
                 elif "Mülakat" in scenario:
                     system_msg += "Mülakat yapıyorsun. Zor teknik sorular sor, cevabı puanla. "
+                
+                if topic == "RPG Oyunu":
+                    system_msg += "Sen bir GM'sın (Oyun Yöneticisi). Hikaye anlat, betimle ve mutlaka 2-3 adet numaralı seçenek sun. "
+                    system_msg += "ÖNEMLİ: Seçenekleri MUTLAKA '1. Seçenek Adı' formatında yeni satırlarda yaz. "
+                    system_msg += "Cevabının sonunda MUTLAKA oyuncunun canını ve envanterini etiket içinde belirt. "
+                    system_msg += "Format: [HP:80] [INV:Kılıç,Meşale] gibi. "
+                    system_msg += "Başlangıçta HP:100 ve INV:Boş olsun. Olaylara göre güncelle. "
+                
                 system_msg += "Cana yakın ve öğretici bir dille yardımcı ol."
 
-            prompt = self._get_topic_prompt(topic, user_input, scenario, sub_option, history_context)
+            # RAG (Doküman) Entegrasyonu
+            # RAG (Doküman) Entegrasyonu - EN YÜKSEK ÖNCELİK
+            # Eğer doküman yüklendiyse, sistem mesajının başına ekliyoruz ki talimatları override edebilsin.
+            if hasattr(self, 'uploaded_notes_contet') and self.uploaded_notes_contet:
+                rag_instruction = f"""
+                [KULLANICI EKLİ DOKÜMAN BAŞLANGIÇ]
+                {self.uploaded_notes_contet}
+                [KULLANICI EKLİ DOKÜMAN BİTİŞ]
+                
+                TALİMAT: Cevaplarını SADECE ve ÖNCELİKLE yukarıdaki dokümana dayandır. 
+                Seçili konu ({topic}) veya senaryo ({scenario}) ne olursa olsun, dokümandaki bilgiyi esas al.
+                Eğer sorunun cevabı dokümanda yoksa: "Bu bilgi yüklediğiniz notlarda yer almıyor." de ve genel bilgini kullan.
+                """
+                # RAG talimatını başa ekle
+                system_msg = rag_instruction + "\n" + system_msg
 
+            prompt = self._get_topic_prompt(topic, user_input, scenario, sub_option, history_context)
+            
+            # RPG Görsel Tetikleyici
+            if topic == "RPG Oyunu" and (len(self.topic_chat_history) == 0):
+                 threading.Thread(target=self.generate_topic_image, args=(scenario, f"{scenario} atmosphere"), daemon=True).start()
+
+            # API Çağrısı ve Fallback (Yedekleme) Mantığı
+            result = ""
+            used_model = "None"
+            
+            # 1. Öncelik: Gemini
             if self.gemini_api_key:
-                client = GeminiClient(api_key=self.gemini_api_key)
-                # System instruction Gemini için ayrı parametre
-                response = client.generate_content(prompt, system_instruction=system_msg)
-                result = response
-            elif self.api_key:
-                client = OpenAI(api_key=self.api_key)
-                res = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": prompt}
-                    ]
-                )
-                result = res.choices[0].message.content
-            else:
-                self.after(0, lambda: messagebox.showwarning("Hata", "API anahtarı eksik."))
+                try:
+                    client = GeminiClient(api_key=self.gemini_api_key)
+                    response = client.generate_content(prompt, system_instruction=system_msg)
+                    
+                    # Hata kontrolü: Eğer response bir string ise ve hata mesajı içeriyorsa
+                    if isinstance(response, str) and ("quota_dimensions" in response or "RESOURCE_EXHAUSTED" in response or "quota" in response):
+                        raise Exception(f"Gemini Quota Error: {response}")
+                        
+                    if response:
+                        result = response
+                        used_model = "Gemini"
+                except Exception as gemini_error:
+                    err = str(gemini_error)
+                    print(f"Gemini Hatası (Fallback devreye giriyor): {err}")
+                    # Gemini hata verdiyse ve OpenAI key varsa devam et, yoksa hata fırlat
+                    if not self.api_key:
+                        self.after(0, lambda err=err: messagebox.showerror("API Hatası", f"Gemini hatası ve OpenAI anahtarı yok: {err}"))
+                        return
+
+            # 2. Öncelik (veya Fallback): OpenAI (GPT)
+            if not result and self.api_key:
+                try:
+                    client = OpenAI(api_key=self.api_key)
+                    res = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
+                    result = res.choices[0].message.content
+                    used_model = "GPT-4o"
+                except Exception as gpt_error:
+                     err = str(gpt_error)
+                     self.after(0, lambda err=err: messagebox.showerror("API Hatası", f"Tüm modeller başarısız oldu. {err}"))
+                     return
+            
+            if not result:
+                self.after(0, lambda: messagebox.showwarning("Hata", "API anahtarı eksik veya geçersiz."))
                 return
 
             self.last_topic_response = result
             self.topic_chat_history.append({"topic": topic, "input": user_input, "output": result})
-            self.after(0, lambda: self._update_topic_ui(topic, user_input, result))
+            self.after(0, lambda t=topic, u=user_input, r=result: self._update_topic_ui(t, u, r))
             
             # Otomatik Seslendirme Kontrolü
             if self.auto_tts_topic_var.get():
                 self.after(0, self._speak_topic_last_response)
                 
         except Exception as e:
-            self.after(0, lambda e=e: messagebox.showerror("Konu Sohbet Hatası", f"Hata: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("Konu Sohbet Hatası", f"Hata: {err}"))
         finally:
             self.after(0, lambda: self.start_topic_btn.configure(state="normal", text="SOHBETİ BAŞLAT"))
             self.after(0, lambda: self.topic_ask_btn.configure(state="normal"))
@@ -1625,8 +2186,92 @@ class App(ctk.CTk):
         self.topic_textbox.insert("end", msg)
         self.topic_textbox.see("end")
         self.status_label.configure(text=f"{topic} sohbeti güncellendi.")
+        
+        # Eğer RPG Modundaysak ve AI seçenekler sunduysa butonları göster
+        if topic == "RPG Oyunu":
+            self._update_rpg_stats(result)
+            self._parse_and_show_rpg_choices(result)
+            # Otomatik Görsel Güncelleme (Her mesajda)
+            threading.Thread(target=self.generate_topic_image, args=("RPG Oyunu", result[:200]), daemon=True).start()
+    def _update_rpg_stats(self, text):
+        """AI yanıtındaki [HP:x] ve [INV:y] etiketlerini parslar ve UI'ı günceller."""
+        import re
+        
+        # HP Parsing
+        hp_match = re.search(r'\[HP:\s*(\d+)\]', text)
+        if hp_match:
+            hp_val = hp_match.group(1)
+            self.hp_label.configure(text=f"❤️ HP: {hp_val}")
+            
+        # Inventory Parsing (Basitçe [INV:...] içeriğini al)
+        inv_match = re.search(r'\[INV:\s*(.*?)\]', text)
+        if inv_match:
+            inv_items = inv_match.group(1)
+            # Uzunsa kısaltım
+            if len(inv_items) > 30:
+                inv_items = inv_items[:27] + "..."
+            self.inv_label.configure(text=f"🎒: {inv_items}")
 
-    # --- ADVANCED EDUCATION: QUIZ MANTIĞI ---
+    def _parse_and_show_rpg_choices(self, text):
+        """Metin içindeki numaralı seçenekleri (1. Git, 2. Kal vb.) tespit eder ve buton oluşturur."""
+        import re
+        # Regex: Satır başı veya boşluktan sonra rakam + nokta veya parantez, sonra metin
+        # Örnek: "1. Saldır" veya "2) Kaç"
+        # Not: **bold** işaretlerini de temizlemeliyiz.
+        
+        choices = []
+        # Satır satır inceleyelim
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            match = re.search(r'^(\d+)[\.\)]\s*(.*)', line)
+            if match:
+                number = match.group(1)
+                content = match.group(2).replace('*', '').strip() # Bold işaretlerini temizle
+                # Çok uzun seçenekleri kısaltmak gerekebilir ama şimdilik olduğu gibi alalım
+                choices.append((number, content))
+        
+        # Eğer seçenek bulduysak butonları oluştur
+        if choices:
+            # Önceki butonları temizle
+            for btn in self.rpg_buttons:
+                btn.destroy()
+            self.rpg_buttons.clear()
+            
+            # Text entry'i gizle
+            self.topic_chat_entry.pack_forget()
+            self.topic_ask_btn.pack_forget()
+            self.quiz_option_frame.pack_forget() # Quiz butonları varsa gizle
+            
+            self.rpg_option_frame.pack(side="left", fill="x", padx=10, pady=10)
+            
+            for num, text in choices:
+                # Buton metni: "1. Saldır" şeklinde
+                btn_text = f"{num}. {text[:20]}..." if len(text) > 20 else f"{num}. {text}"
+                cmd = lambda t=text: self._handle_rpg_choice(t)
+                
+                btn = ctk.CTkButton(self.rpg_option_frame, text=btn_text, command=cmd, font=("Inter", 11))
+                btn.pack(side="left", padx=2, fill="x", expand=True)
+                self.rpg_buttons.append(btn)
+        else:
+            # Seçenek yoksa normal input alanını göster
+            self.rpg_option_frame.pack_forget()
+            self.topic_chat_entry.pack(side="left", fill="x", expand=True, padx=10, pady=10)
+            self.topic_ask_btn.pack(side="right", padx=10, pady=10)
+
+    def _handle_rpg_choice(self, choice_text):
+        """RPG butonuna basılınca tetiklenir."""
+        # Seçilen metni gönder
+        self.topic_chat_entry.delete(0, "end")
+        self.topic_chat_entry.insert(0, choice_text)
+        
+        # Normale dön
+        self.rpg_option_frame.pack_forget()
+        self.topic_chat_entry.pack(side="left", fill="x", expand=True, padx=10, pady=10)
+        self.topic_ask_btn.pack(side="right", padx=10, pady=10)
+        
+        self.run_topic_ai_chat()
+
     def run_topic_quiz(self):
         """AI'dan konuyla ilgili 5 soruluk özel bir quiz oluşturmasını ister."""
         topic = self.topic_combo.get()
@@ -1649,16 +2294,29 @@ class App(ctk.CTk):
 
     def _quiz_logic(self, topic, context):
         try:
+            # RAG (Doküman) Entegrasyonu - Quiz için Öncelik
+            if hasattr(self, 'uploaded_notes_contet') and self.uploaded_notes_contet:
+                prompt_content = f"""
+                DİKKAT: Kullanıcı bir ders notu yükledi (aşağıda).
+                Görevin: SADECE bu nottaki bilgilere dayanan 5 soruluk bir sınav hazırlamak.
+                
+                [YÜKLENEN NOTLAR]:
+                {self.uploaded_notes_contet}
+                
+                [TALİMAT]:
+                1. Sorular sadece yukarıdaki metinden çıkmalı.
+                2. Metinde olmayan hiçbir şeyi sorma.
+                3. Zorluk seviyesi karışık olsun.
+                """
+            else:
+                prompt_content = f"""
+                {topic} konusu ve aşağıdaki sohbet geçmişi hakkında 5 soruluk, çoktan seçmeli bir Quiz hazırla.
+                Sohbet Geçmişi:
+                {context if context else f"{topic} hakkında genel bilgiler."}
+                """
+
             prompt = f"""
-            {topic} konusu ve aşağıdaki sohbet geçmişi hakkında 5 soruluk, çoktan seçmeli bir Quiz hazırla.
-            
-            [DİKKAT]: Sorular KESİNLİKLE aşağıdaki 'Sohbet Geçmişi'ndeki bilgilere dayanmalı.
-            [KRİTİK]: Özellikle sohbetin EN SONUNDA konuşulan konulara ağırlık ver ve soruları oradan seç. 
-            
-            Sohbet Geçmişi:
-            {context if context else f"{topic} hakkında genel bilgiler."}
-            
-            Zorluk seviyeleri: 1 Kolay, 2 Orta, 2 Zor olmalı.
+            {prompt_content}
             
             [KRİTİK]: Yanıtın SADECE aşağıda belirtilen JSON formatında olmalı, başka hiçbir metin ekleme.
             Format:
@@ -1687,16 +2345,25 @@ class App(ctk.CTk):
             # JSON temizleme ve yükleme
             import json
             import re
-            json_match = re.search(r"(\[.*\])", result, re.DOTALL)
-            if json_match:
-                self.current_quiz_questions = json.loads(json_match.group(1))
+            
+            # Markdown code block temizleme (```json ... ```)
+            clean_result = result.replace("```json", "").replace("```", "").strip()
+            
+            # İlk '[' ve son ']' arasını al
+            start_idx = clean_result.find('[')
+            end_idx = clean_result.rfind(']')
+            
+            if start_idx != -1 and end_idx != -1:
+                clean_result = clean_result[start_idx:end_idx+1]
+                self.current_quiz_questions = json.loads(clean_result)
                 self.after(0, self._show_next_quiz_question)
             else:
                 raise ValueError("AI geçerli bir JSON quiz üretmedi.")
                 
         except Exception as e:
             self.is_quiz_active = False
-            self.after(0, lambda e=e: messagebox.showerror("Quiz Hatası", f"Quiz oluşturulamadı: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("Quiz Hatası", f"Quiz oluşturulamadı: {err}"))
         finally:
             self.after(0, lambda: self.start_quiz_btn.configure(state="normal", text="📝 QUIZ"))
 
@@ -1744,6 +2411,11 @@ class App(ctk.CTk):
         
         self.topic_textbox.insert("end", result_text + "\n" + "="*30 + "\n")
         self.topic_textbox.see("end")
+        
+        # İstatistikleri kaydet ve UI'yı güncelle
+        score_percent = (self.quiz_score / total) * 100 if total > 0 else 0
+        self.stats_manager.add_quiz_result(score_percent)
+        self.update_stats_ui()
         
         # UI'yı eski haline getir
         self.quiz_option_frame.pack_forget()
@@ -1803,9 +2475,10 @@ class App(ctk.CTk):
                 return
 
             self.topic_flashcards = result
-            self.after(0, lambda: self._update_flashcard_ui(topic, result))
+            self.after(0, lambda t=topic, r=result: self._update_flashcard_ui(t, r))
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Hata", f"Kartlar üretilemedi: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("Hata", f"Kartlar üretilemedi: {err}"))
         finally:
             self.after(0, lambda: self.flashcard_btn.configure(state="normal", text="🎴 KARTLAR"))
 
@@ -1916,7 +2589,8 @@ class App(ctk.CTk):
             response.stream_to_file(temp_tts)
             self._play_audio(temp_tts)
         except Exception as e:
-            self.after(0, lambda e=e: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("TTS Hatası", f"Seslendirme başarısız: {err}"))
 
     def ask_coach_ai_question(self):
         """Dil Koçu sekmesinde kullanıcının sorduğu soruyu yanıtlar."""
@@ -1972,9 +2646,10 @@ class App(ctk.CTk):
                 return
 
             self.coach_chat_history.append((question, answer))
-            self.after(0, lambda: self._add_coach_chat_to_ui(question, answer))
+            self.after(0, lambda q=question, a=answer: self._add_coach_chat_to_ui(q, a))
         except Exception as e:
-            self.after(0, lambda e=e: messagebox.showerror("Koç Chat Hatası", f"Hata: {e}"))
+            err = str(e)
+            self.after(0, lambda err=err: messagebox.showerror("Koç Chat Hatası", f"Hata: {err}"))
         finally:
             self.after(0, lambda: self.coach_ask_btn.configure(state="normal", text="SOR"))
             self.after(0, lambda: self.coach_chat_entry.delete(0, "end"))
@@ -2090,10 +2765,9 @@ class App(ctk.CTk):
                 print(f"Görsel Analiz Hatası: {ae}")
 
         self.last_analysis = analysis 
-        self.analysis_results[provider] = analysis # Çoklu analiz için sakla
-        
-        self.after(0, lambda: self.textbox.insert("end", f"\n\n[ANALİZ ({provider})]:\n{analysis}\n"))
-        self.after(0, lambda: self.analysis_textbox.insert("end", f"\n\n[ANALİZ ({provider})]:\n{analysis}\n"))
+        self.analysis_results[provider] = analysis        # Transkript ve Analizi ilgili kutulara yazdır
+        self.after(0, lambda p=provider, a=analysis: self.textbox.insert("end", f"\n\n[ANALİZ ({p})]:\n{a}\n"))
+        self.after(0, lambda p=provider, a=analysis: self.analysis_textbox.insert("end", f"\n\n[ANALİZ ({p})]:\n{a}\n"))
         
         # Uygulama içi görselleri güncelle
         self.after(0, self._update_analysis_images)
@@ -2283,7 +2957,8 @@ class App(ctk.CTk):
                 else:
                     self.after(0, lambda: messagebox.showerror("Hata", "ElevenLabs modülü yüklenemedi."))
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror("API Hatası", f"ElevenLabs bağlantı hatası: {e}"))
+                err = str(e)
+                self.after(0, lambda err=err: messagebox.showerror("API Hatası", f"ElevenLabs bağlantı hatası: {err}"))
                 self.after(0, lambda: self.status_label.configure(text="Bağlantı Başarısız."))
 
         threading.Thread(target=refresh_worker, daemon=True).start()
